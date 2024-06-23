@@ -1,0 +1,95 @@
+name: Test
+
+on:
+  pull_request:
+    branches: [ main ]
+    paths:
+      - ./github/workflows/**/*.yaml
+      - examples/**/*.rs
+      - src/**/*.pest
+      - src/**/*.rs
+      - tests/**/*.rs
+
+  ## TODO: maybe prevent running when `tag` is published
+  push:
+    branches: [ main ]
+    paths:
+      - ./github/workflows/**/*.yaml
+      - examples/**/*.rs
+      - src/**/*.pest
+      - src/**/*.rs
+      - tests/**/*.rs
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build_and_test:
+    name: Rust project - Build and Test - Liquid Grammar Pest
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        toolchain:
+          - stable
+          - beta
+          - nightly
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ## See: https://github.com/actions/checkout/issues/1662
+          fetch-depth: 1
+          fetch-tags: true
+          ref: ${{ github.head_ref }}
+
+      - name: Cache restore
+        id: cache-cargo-restore
+        uses: actions/cache/restore@v4.0.2
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Update and set tool chain -> ${{ matrix.toolchain }}
+        run: |
+          rustup update ${{ matrix.toolchain }} &&
+          rustup default ${{ matrix.toolchain }} &&
+          rustup component add clippy
+
+      - name: Build source code
+        run: cargo build --verbose
+
+      - name: Test source code
+        run: cargo test --verbose
+
+      - name: Lint source code
+        run: cargo clippy --verbose
+
+      - name: Check examples
+        run: |
+          while read -r _example; do
+            printf 'Checking example: %s\n' "${_example}"
+            cargo check --example "${_example}"
+          done < <(cargo check --example 2>&1 | sed -e '1,2d' -e '$d' -e 's/^[ \t]*//g')
+
+      - name: Cache save
+        uses: actions/cache/save@v4.0.2
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ steps.cache-cargo-restore.outputs.cache-primary-key }}
+
+
+##
+# Attributions:
+#   - https://doc.rust-lang.org/cargo/guide/continuous-integration.html
+#   - https://github.com/actions/starter-workflows/blob/main/ci/rust.yml

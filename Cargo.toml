@@ -1,0 +1,37 @@
+[package]
+name = "liquid-grammar-pest"
+version = "0.0.1"
+authors = ["S0AndS0 <strangerthanbland@gmail.com>"]
+edition = "2021"
+license = "AGPL-3.0"
+description = "Pest grammar for parsing Shopify Liquid"
+readme = ".github/README.md"
+homepage = "https://github.com/rust-utilities/liquid-grammar-pest"
+repository = "https://github.com/rust-utilities/liquid-grammar-pest"
+keywords = [ "liquid", "pest" ]
+categories = [ "development-tools::ffi", "parser-implementations" ]
+
+# For publishing
+exclude = [ "*" ]
+
+include = [
+  "src/**/*.rs",
+	## WARNING: do not forget to include Pest grammar(s) or publishing will fail!
+  "src/**/*.pest",
+  ".github/README.md",
+  "CHANGELOG.md",
+  "Cargo.toml",
+  "LICENSE",
+]
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+pest = "2.7.10"
+pest_derive = "2.7.10"
+
+[dev-dependencies]
+clap = { version = "4.3.0", features = ["derive"] }
+clap_complete = "4.3.0"
+colored = "2.1.0"

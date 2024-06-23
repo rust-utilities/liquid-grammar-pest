@@ -1,0 +1,76 @@
+name: Publish
+
+on:
+  workflow_run:
+    workflows: [ "Test" ]
+    conclusion: success
+    types:
+      - completed
+
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+jobs:
+  publish:
+    name: Rust project - Publish - Liquid Grammar Pest
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ## See: https://github.com/actions/checkout/issues/1662
+          fetch-depth: 1
+          fetch-tags: true
+          ref: ${{ github.head_ref }}
+
+      - name: Cache restore
+        id: cache-cargo-restore
+        uses: actions/cache/restore@v4.0.2
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Update and set tool chain -> stable
+        run: rustup update stable && rustup default stable
+
+      - name: Ensure versions from Cargo and Git are identical
+        run: |
+          CARGO_TOML_VERSION="v$(awk '/^version =/ { gsub("\"",""); print $3; }' Cargo.toml)"
+          GIT_TAG_VERSION="$(git tag --list --sort -creatordate v* | tail -1)"
+
+          if [[ "${CARGO_TOML_VERSION}" != "${GIT_TAG_VERSION}" ]]; then 
+            cat >&2 <<EOF
+            Error: Cargo and Git versions do not match
+            CARGO_TOML_VERSION  ->  ${CARGO_TOML_VERSION}
+            GIT_TAG_VERSION     ->  ${GIT_TAG_VERSION}
+          EOF
+            exit 1
+          fi
+
+      - name: Publish dry run
+        run: cargo publish --dry-run
+
+      - name: Publish for real
+        run: cargo publish
+
+      - name: Cache save
+        uses: actions/cache/save@v4.0.2
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ steps.cache-cargo-restore.outputs.cache-primary-key }}
+

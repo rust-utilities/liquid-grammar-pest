@@ -1,0 +1,4531 @@
+//! ## Name space prefixes
+//!
+//! ### `liquid__code`
+//!
+//! Match `if target.prop == "value"` from inputs similar to;
+//!
+//! - `{% if target.prop == "value" %}<\n...>`
+//! - `{% liquid if target.prop == "value"<\n...> %}`
+//!
+//! ### `liquid__key_word`
+//!
+//! Match `if`, `unless`, and other words from inputs similar to;
+//!
+//! - `{% if target.prop == "value" %}<\n...>`
+//! - `{% liquid if target.prop == "value"\n<...> %}`
+//!
+//! ### `liquid__block`
+//!
+//! Match inputs similar to;
+//!
+//! ```liquid
+//! {% if value == true %}
+//!   The honest truth
+//! {% elsif value == false %}
+//!   Totally falsey
+//! {% else %}
+//!   Value ain't no Boolean
+//! {% endif %}
+//! ```
+//!
+//! #### `liquid__block_subsection`
+//!
+//! Match inputs similar to;
+//!
+//! - `{% if value == true %}\n  The honest truth`
+//! - `{% elsif value == false %}\n  Totally falsey`
+//! - `{% else %}\n   Value ain't no Boolean`
+//!
+//! #### `liquid__tag`
+//!
+//! Match `{% if target.prop == "value" %}` from inputs similar to;
+//!
+//! - `{% if target.prop == "value" %}<\n...>`
+//!
+//! #### `liquid__tag_content` (silent)
+//!
+//! Match `(\s|\n)* if target.prop == "value" (\s|\n)*` from inputs similar to;
+//!
+//! - `{% if target.prop == "value" %}<\n...>`
+//!
+//! ### `liquid__tagged`
+//!
+//! Match `if target.prop == "value"\n` from inputs similar to;
+//!
+//! - `{% liquid if target.prop == "value"\n<...> %}`
+//!
+//! ## TODO:
+//!
+//! - Document all the input/output expectations
+
+/// Root of parsing tree
+document = {
+    SOI
+  ~ front_matter?
+  ~ (liquid__block__outside_iteration | content__block)*
+  ~ EOI
+}
+
+/* ## Liquid blocks and content before, after, or within such blocks {{{ */
+liquid__block__outside_iteration = _{
+    liquid__block__control_flow__branch__outside_iteration
+  | liquid__block__control_flow__case__outside_iteration
+  | liquid__block__iteration__tablerow__outside_iteration
+  | liquid__tag__liquid__outside_iteration
+  | liquid__block__capture__outside_iteration
+  /* | */
+  | liquid__block__agnostic_to_iteration
+  | liquid__tag__agnostic_to_iteration
+  | liquid__evaluate
+}
+
+liquid__block__within_iteration = _{
+    (liquid__tag__iteration__for__continue | liquid__tag__iteration__for__break | liquid__block__iteration__for__cycle)
+  | liquid__block__control_flow__branch__within_iteration
+  | liquid__block__control_flow__case__within_iteration
+  | liquid__block__iteration__tablerow__within_iteration
+  | liquid__tag__liquid__within_iteration
+  | liquid__block__capture__within_iteration
+  /* | */
+  | liquid__block__agnostic_to_iteration
+  | liquid__tag__agnostic_to_iteration
+  | liquid__evaluate
+}
+
+block__outside_iteration = _{ liquid__block__outside_iteration | content__block }
+block__within_iteration = _{ liquid__block__within_iteration | content__block }
+
+liquid__block__agnostic_to_iteration = _{
+    liquid__block__iteration__for
+  | liquid__block__comment
+  | liquid__block__raw
+}
+
+/// Anything that could not be parsed as Liquid code
+content__block = { (!liquid__maybe_parseable ~ ANY)+ }
+
+/* ### Liquid tags {{{ */
+liquid__tag__agnostic_to_iteration = _{
+    liquid__tag__render
+  | liquid__tag__include
+  | liquid__tag__assign
+  | liquid__tag__increment
+  | liquid__tag__decrement
+}
+/* }}} */
+/* }}} */
+
+/* ## Liquid code within `liquid` tag delimiters {{{ */
+liquid__tagged__outside_iteration = _{
+    liquid__tagged__control_flow__branch__outside_iteration
+  | liquid__tagged__control_flow__case__outside_iteration
+  | liquid__tagged__iteration__tablerow__outside_iteration
+  /* | */
+  | liquid__tagged__agnostic_to_iteration
+}
+
+liquid__tagged__within_iteration = _{
+    liquid__tagged__control_flow__branch__within_iteration
+  | liquid__tagged__control_flow__case__within_iteration
+  | liquid__tagged__iteration__tablerow__within_iteration
+  /* | */
+  | liquid__tagged__iteration__for__cycle
+  | liquid__tagged__agnostic_to_iteration
+}
+
+liquid__tagged__agnostic_to_iteration = _{
+    liquid__echo
+  | liquid__tagged__iteration__for
+  | liquid__tagged__render
+  | liquid__tagged__include
+  | liquid__tagged__assign
+  | liquid__tagged__increment
+  | liquid__tagged__decrement
+}
+/* }}} */
+
+/* ## Detect Front Matter and YAML {{{ */
+/// ### Example Front Matter with YAML
+///
+/// ```liquid
+/// ---
+/// title: Super cool post
+/// description: Something about some thing
+/// ---
+/// ```
+front_matter = ${ PUSH("---") ~ NEWLINE ~ yaml_content ~ POP }
+
+/* TODO: maybe write PEG for YAML syntax too */
+/// ### Example YAML
+///
+/// ```yaml
+/// title: Super cool post
+/// description: Something about some thing
+/// ```
+yaml_content = { ( !"---" ~ (SPACE_OR_NEWLINE | ANY) )* }
+/* }}} */
+
+/* ## Liquid syntax primitives to facilitate better error reporting {{{ */
+quote__single = { "'" }
+quote__double = { "\"" }
+
+bracket__square__open  = { "[" }
+bracket__square__close = { "]" }
+
+parenthese__open  = { "(" }
+parenthese__close = { ")" }
+
+liquid__tag__open__strip  = { "{%-"}
+liquid__tag__open__plain  = { "{%" }
+liquid__tag__close__strip = { "-%}" }
+liquid__tag__close__plain = { "%}" }
+
+liquid__evaluate__open__strip  = { "{{-" }
+liquid__evaluate__open__plain  = { "{{" }
+liquid__evaluate__close__strip = { "-}}" }
+liquid__evaluate__close__plain = { "}}" }
+
+/// All `liquid__key_word` values which _should_ be parsed by defined rules
+/// TODO: Use following rules to help in crafting `liquid__not_parsed` rules
+liquid__key_word__block = {
+    liquid__key_word__control_flow__branch
+  | liquid__key_word__control_flow__case
+  | liquid__key_word__control_flow__when
+  | liquid__key_word__iteration__for
+  | liquid__key_word__iteration__tablerow
+  | liquid__key_word__comment
+  | liquid__key_word__capture
+}
+
+liquid__key_word__tag = {
+    liquid__key_word__iteration__continue
+  | liquid__key_word__iteration__break
+  | liquid__key_word__iteration__cycle
+  | liquid__key_word__render
+  | liquid__key_word__include
+  | liquid__key_word__assign
+}
+
+/* ### Helpers for recognition of Liquid tags {{{ */
+/// Look ahead to check if input could be parsed as Liquid
+liquid__maybe_parseable = { &(liquid__tag__element | liquid__evaluate__element) }
+
+/// Match inputs similar to `{% assign foo=bar %}` and `{%- if true -%}`
+///
+/// Does **not** match blocks (begin/end tagged) of Liquid
+liquid__tag__element = {
+    (liquid__tag__open__strip | liquid__tag__open__plain)
+  ~ (!(liquid__tag__close__strip | liquid__tag__close__plain) ~ ANY)*
+  ~ (!(liquid__tag__close__strip | liquid__tag__close__plain) ~ ANY)*
+  ~ (liquid__tag__close__strip | liquid__tag__close__plain)
+}
+
+/// Match inputs similar to `{{- site.title -}}` and `{{ "foo,bar" | split: "," }}`
+liquid__evaluate__element = {
+    (liquid__evaluate__open__strip | liquid__evaluate__open__plain)
+  ~ (!(liquid__evaluate__open__strip | liquid__evaluate__open__plain) ~ ANY)*
+  ~ (liquid__evaluate__open__strip | liquid__evaluate__open__plain)
+}
+/* }}} */
+
+/* ### Shared termination of liquid blocks, eg. `endif`, `endunless`, `endcase`, `endfor`, etc {{{ */
+/* #### Liquid termination common to blocks and `liquid` tag {{{ */
+/// Mutates stack by attempting to pop `endif` or similar tags from stack
+///
+/// Match `endif`, and similar, from inputs similar to;
+///
+/// - `{% endif %}`
+/// - `{% endunless %}`
+/// - `{% endcase %}`
+/// - `{% endfor %}`
+liquid__code__end = ${ "end" ~  POP }
+/* }}} */
+
+/* #### Liquid termination specific to blocks {{{ */
+/// Match inputs similar to;
+///
+/// - `{% endif %}`
+/// - `{% endunless %}`
+/// - `{% endcase %}`
+/// - `{% endfor %}`
+liquid__tag__plain__end = {
+    liquid__tag__open__plain
+  ~ SPACE_OR_NEWLINE*
+  ~ liquid__code__end
+  ~ SPACE_OR_NEWLINE*
+  ~ liquid__tag__close__plain
+}
+
+/// Match inputs similar to;
+///
+/// - `{%- endif %}`
+/// - `{%- endunless %}`
+/// - `{%- endcase %}`
+/// - `{%- endfor %}`
+liquid__tag__strip_leading__end = {
+    liquid__tag__open__strip
+  ~ SPACE_OR_NEWLINE*
+  ~ liquid__code__end
+  ~ SPACE_OR_NEWLINE*
+  ~ liquid__tag__close__plain
+}
+
+/// Match inputs similar to;
+///
+/// - `{% endif -%}`
+/// - `{% endunless -%}`
+/// - `{% endcase -%}`
+/// - `{% endfor -%}`
+liquid__tag__strip_trailing__end = {
+    liquid__tag__open__plain
+  ~ SPACE_OR_NEWLINE*
+  ~ liquid__code__end
+  ~ SPACE_OR_NEWLINE*
+  ~ liquid__tag__close__strip
+}
+
+/// Match inputs similar to;
+///
+/// - `{%- endif -%}`
+/// - `{%- endunless -%}`
+/// - `{%- endcase -%}`
+/// - `{%- endfor -%}`
+liquid__tag__strip_both__end = {
+    liquid__tag__open__strip
+  ~ SPACE_OR_NEWLINE*
+  ~ liquid__code__end
+  ~ SPACE_OR_NEWLINE*
+  ~ liquid__tag__close__strip
+}
+/* }}} */
+/* }}} */
+/* }}} */
+
+/* ## Liquid types {{{ */
+/// Note order is important to prevent `object` from glomping `boolean` words
+liquid__type = { boolean | nil | number | object | string }
+
+/* ## Liquid primitives {{{ */
+boolean = { "true" | "false" }
+nil = { "nil" }
+number = { ASCII_DIGIT+ }
+/* }}} */
+
+/* ## Liquid string {{{ */
+/// Note `string__quote__double__content` and `string__quote__single__content`
+/// are Compound Atomic and  recursive to flatten results and allow for
+/// non-quoted characters to be prefixed by backslashes while also preserving
+/// informative error messages about unbalanced quotes.
+///
+/// ### Further reading
+///
+/// - [Pest Book -- Syntax of pest grammars -- Atomic -- Compound Atomic](https://pest.rs/book/grammars/syntax.html?highlight=atom#atomic)
+string = { string__quote__single | string__quote__double }
+
+string__quote__double = { quote__double ~ string__quote__double__content ~ quote__double }
+string__quote__double__content = @{
+  (
+      !(quote__double | "\\")
+    ~ ANY
+    | "\\" ~ ("\\" | quote__double | string__quote__double__content)
+  )*
+}
+
+string__quote__single = { quote__single ~ string__quote__single__content ~ quote__single }
+string__quote__single__content = @{
+  (
+      !(quote__single | "\\")
+    ~ ANY
+    | "\\" ~ ("\\" | quote__single | string__quote__single__content)
+  )*
+}
+/* }}} */
+
+/* ## Liquid object references {{{ */
+/* {{{ */
+/// ### Example input
+///
+/// `outer.prop["label"][some.thing].inner`
+///
+/// ### Parser result
+///
+/// ```text
+/// - object
+///   - object__word: "outer"
+///   - object__accessor
+///     - object__property > object__word: "prop"
+///     - object__accessor
+///       - object__key
+///         - bracket__square__open: "["
+///         - string > string__quote__double
+///           - quote__double: "\""
+///           - string__quote__double__content: "label"
+///           - quote__double: "\""
+///         - bracket__square__close: "]"
+///       - object__accessor
+///         - object__key
+///           - bracket__square__open: "["
+///           - object
+///             - object__word: "some"
+///             - object__accessor > object__property > object__word: "thing"
+///           - bracket__square__close: "]"
+///         - object__accessor > object__property > object__word: "inner"
+/// ```
+/* }}} */
+object = ${ object__word ~ (SPACE_OR_NEWLINE* ~ object__accessor)* }
+
+object__word = @{ ("_" | ASCII_ALPHANUMERIC)+ ~ ("_" | ASCII_ALPHANUMERIC)* }
+object__accessor = ${ (object__property | object__key) ~ object__accessor* }
+
+object__property = ${ "." ~ object__word }
+object__key = ${
+      bracket__square__open
+    ~ SPACE_OR_NEWLINE*
+    ~ ( number | string | object )
+    ~ bracket__square__close
+}
+/* }}} */
+/* }}} */
+
+/* ## Liquid evaluation/execution scope {{{ */
+liquid__evaluate = _{
+    liquid__evaluate__plain
+  | liquid__evaluate__strip_leading
+  | liquid__evaluate__strip_trailing
+  | liquid__evaluate__strip_both
+}
+
+/// Match `object.prop | append: " foo" | capitalize` from input similar to
+///
+/// ```liquid
+/// {{ object.prop | append: " foo" | capitalize }}
+/// ```
+liquid__code__evaluate = _{
+    liquid__type
+  ~ SPACE_OR_NEWLINE*
+  ~ liquid__filter__list?
+}
+
+/// Match ` object.prop | append: " foo" | capitalize ` from input similar to
+///
+/// ```liquid
+/// {{ object.prop | append: " foo" | capitalize }}
+/// ```
+liquid__tag_content__evaluate = _{
+    SPACE_OR_NEWLINE*
+  ~ liquid__code__evaluate
+  ~ SPACE_OR_NEWLINE*
+}
+
+/* ### Non-stripped variant of evaluation/execution scope {{{ */
+/// Match input similar to
+///
+/// ```liquid
+/// {{ object.prop | append: " foo" | capitalize }}
+/// ```
+liquid__evaluate__plain = ${
+    liquid__evaluate__open__plain
+  ~ liquid__tag_content__evaluate 
+  ~ liquid__evaluate__close__plain
+}
+/* }}} */
+
+/* ### Strip leading spaces variant of evaluation/execution scope {{{ */
+/// Match input similar to
+///
+/// ```liquid
+/// {{- object.prop | append: " foo" | capitalize }}
+/// ```
+liquid__evaluate__strip_leading = ${
+    liquid__evaluate__open__strip
+  ~ liquid__tag_content__evaluate 
+  ~ liquid__evaluate__close__plain
+}
+/* }}} */
+
+/* ### Strip trailing spaces variant of evaluation/execution scope {{{ */
+/// Match input similar to
+///
+/// ```liquid
+/// {{ object.prop | append: " foo" | capitalize -}}
+/// ```
+liquid__evaluate__strip_trailing = ${
+    liquid__evaluate__open__plain
+  ~ liquid__tag_content__evaluate 
+  ~ liquid__evaluate__close__strip
+}
+/* }}} */
+
+/* ### Strip leading and trailing spaces variant of evaluation/execution scope {{{ */
+/// Match input similar to
+///
+/// ```liquid
+/// {{- object.prop | append: " foo" | capitalize -}}
+/// ```
+liquid__evaluate__strip_both = ${
+    liquid__evaluate__open__strip
+  ~ liquid__tag_content__evaluate 
+  ~ liquid__evaluate__close__strip
+}
+/* }}} */
+
+/* }}} */
+
+/* ## Liquid control flow `if`, `elsif`, `unless`, and `else` -> https://shopify.github.io/liquid/tags/control-flow/ {{{ */
+/* ### Liquid reserved words and syntax for comparisons such as `if`, `elsif`, `else`, and `unless` {{{ */
+/// Match and label either `if` or `unless`
+liquid__key_word__control_flow__branch = { "if" | "unless" }
+
+/// Match input similar to;
+///
+/// - `site.env['production'] == false or nil`
+/// - `page.tags contains includes.target`
+liquid__code__control_flow__branch__comparison__expression = {
+    liquid__code__control_flow__branch__comparison__expression__joined+
+  | liquid__code__control_flow__branch__comparison__expression__pair
+  | liquid__code__control_flow__branch__comparison__operator__word
+}
+
+/// See: [Liquid -- Order of Operations](https://shopify.github.io/liquid/basics/operators/#order-of-operations)
+///
+/// TLDR: series of `and`/`or` are evaluated from right to left, so we recurs
+/// such that interpreters should execute from deepest level on up
+///
+/// Match input similar to;
+///
+/// - `target.prop or page.prop and site.prop`
+/// - `target.prop == false or nil`
+liquid__code__control_flow__branch__comparison__expression__joined = {
+    (liquid__code__control_flow__branch__comparison__expression__pair | liquid__code__control_flow__branch__comparison__operator__word)
+  ~ SPACE_OR_NEWLINE+
+  ~ liquid__code__control_flow__branch__comparison__operator__joiner
+  ~ SPACE_OR_NEWLINE+
+  ~ (
+        liquid__code__control_flow__branch__comparison__expression__joined
+      | liquid__code__control_flow__branch__comparison__expression__pair
+      | liquid__code__control_flow__branch__comparison__operator__word
+    )
+}
+
+/// Match input similar to; `page.title != "spam"`
+liquid__code__control_flow__branch__comparison__expression__pair = {
+    liquid__code__control_flow__branch__comparison__operator__word
+  ~ SPACE_OR_NEWLINE*
+  ~ liquid__code__control_flow__branch__comparison__operator
+  ~ SPACE_OR_NEWLINE*
+  ~ liquid__code__control_flow__branch__comparison__operator__word
+}
+
+/// Collection of rules to match and name one of; `==`, `!=`, `>=`, `<=`, `>`, `<`, or `contains`
+liquid__code__control_flow__branch__comparison__operator = { equals | not_equals | greater_or_equals | less_than_or_equals | greater | less_than | contains }
+equals              = { "==" }
+not_equals          = { "!=" }
+greater_or_equals   = { ">=" }
+less_than_or_equals = { "<=" }
+greater             = { ">" }
+less_than           = { "<" }
+contains            = { "contains" }
+
+/// Collection of rules to match and name one of; `or` or `and` keywords
+liquid__code__control_flow__branch__comparison__operator__joiner = { or | and }
+or  = { "or" }
+and = { "and" }
+
+/// Match and label any `liquid__type`
+liquid__code__control_flow__branch__comparison__operator__word = { liquid__type }
+/* }}} */
+
+/* ### Liquid control flow `if`, `elsif`, `else`, and `unless` common to blocks and `liquid` tag {{{ */
+/// Mutates stack by pushing `liquid__key_word__control_flow__branch` onto stack
+///
+/// Match `if site.env['production'] == true` or `unless list contains 'thing'` portion of either;
+///
+/// - `{% if site.env['production'] == true %}`
+/// - `{% unless list contains 'thing' %}`
+///
+/// ... Or;
+///
+/// ```liquid
+/// {% liquid
+///   if site.env['production'] == true
+///     echo 'Is production'
+///   endif
+/// %}
+/// ```
+liquid__code__control_flow__branch__start = _{
+    PUSH(liquid__key_word__control_flow__branch)
+  ~ SPACE_OR_NEWLINE+
+  ~ liquid__code__control_flow__branch__comparison__expression
+}
+
+/// Match `elsif value == false` portion from inputs similar to;
+///
+/// - `{% elsif value == false %}`
+///
+/// ... Or;
+///
+/// ```liquid
+/// {% liquid
+///   if site.env['production'] == true
+///     echo 'Is production'
+///   elsif site.env['production'] == false
+///     echo 'Not production'
+///   endif
+/// %}
+/// ```
+liquid__code__control_flow__branch__elsif = _{
+    "elseif"
+  ~ SPACE_OR_NEWLINE+
+  ~ liquid__code__control_flow__branch__comparison__expression
+}
+
+/// Match `else` portion from inputs similar to;
+///
+/// - `{% else %}`
+///
+/// ... Or;
+///
+/// ```liquid
+/// {% liquid
+///   if site.env['production'] == true
+///     echo 'Is production'
+///   elsif site.env['production'] == false
+///     echo 'Not production'
+///   else
+///     echo 'Production environment variable undefined!'
+///   endif
+/// %}
+/// ```
+liquid__code__control_flow__branch__else = _{ "else" }
+/* }}} */
+
+/* ### Liquid control flow `if`, `elsif`, `else`, and `unless` common to all blocks regardless of `for` loops {{{ */
+/* #### Liquid control flow `if`, `elsif`, `else`, and `unless` tag content common to all blocks regardless of `for` loops {{{ */
+/// Match ` if site.env['production'] == true ` or ` unless list contains
+/// 'thing' ` (with optional newlines and/or spaces) portion of either;
+///
+/// - `{% if site.env['production'] == true -%}`
+/// - `{% unless list contains 'thing' %}`
+liquid__tag_content__control_flow__branch__start = _{
+    SPACE_OR_NEWLINE*
+  ~ liquid__code__control_flow__branch__start
+  ~ SPACE_OR_NEWLINE*
+}
+
+/// Match ` elsif value == false ` (with optional newlines and/or spaces)
+/// portion from inputs similar to;
+///
+/// - `{% elsif value == false %}`
+liquid__tag_content__control_flow__branch__elsif = _{
+    SPACE_OR_NEWLINE*
+  ~ liquid__code__control_flow__branch__elsif
+  ~ SPACE_OR_NEWLINE*
+}
+
+/// Match ` else ` (with optional newlines and/or spaces) portion from inputs
+/// similar to;
+///
+/// - `{% else %}`
+liquid__tag_content__control_flow__branch__else = _{
+    SPACE_OR_NEWLINE*
+  ~ liquid__code__control_flow__branch__else
+  ~ SPACE_OR_NEWLINE*
+}
+/* }}} */
+
+/* #### Non-stripped variant of `if`, `elsif`, `else`, or `unless` common to all block regardless of `for` loops {{{ */
+/// Match input similar to;
+///
+/// - `{% if value == true %}`
+/// - `{% unless list contains 'thing' %}`
+liquid__tag__control_flow__branch__base__plain__start = _{
+    liquid__tag__open__plain
+  ~ liquid__tag_content__control_flow__branch__start
+  ~ liquid__tag__close__plain
+}
+
+/// Match input similar to;
+///
+/// - `{% elsif value == false %}`
+liquid__tag__control_flow__branch__base__plain__elsif = _{
+    liquid__tag__open__plain
+  ~ liquid__tag_content__control_flow__branch__elsif
+  ~ liquid__tag__close__plain
+}
+
+/// Match input similar to;
+///
+/// - `{% else %}`
+liquid__tag__control_flow__branch__base__plain__else = _{
+    liquid__tag__open__plain
+  ~ liquid__tag_content__control_flow__branch__else
+  ~ liquid__tag__close__plain
+}
+/* }}} */
+
+/* #### Strip leading spaces variant of `if`, `elsif`, `else`, or `unless` common to all block regardless of `for` loops {{{ */
+/// Match input similar to;
+///
+/// - `{%- if value == true %}`
+/// - `{%- unless list contains 'thing' %}`
+liquid__control_flow__branch__base__strip_leading__start = _{
+    liquid__tag__open__strip
+  ~ liquid__tag_content__control_flow__branch__start
+  ~ liquid__tag__close__plain
+}
+
+/// Match input similar to;
+///
+/// - `{%- elsif value == false %}`
+liquid__control_flow__branch__base__strip_leading__elsif = _{
+    liquid__tag__open__strip
+  ~ liquid__tag_content__control_flow__branch__elsif
+  ~ liquid__tag__close__plain
+}
+
+/// Match input similar to;
+///
+/// - `{%- else %}`
+liquid__control_flow__branch__base__strip_leading__else = _{
+    liquid__tag__open__strip
+  ~ liquid__tag_content__control_flow__branch__else
+  ~ liquid__tag__close__plain
+}
+/* }}} */
+
+/* #### Strip trailing spaces variant of `if`, `elsif`, `else`, or `unless` common to all block regardless of `for` loops {{{ */
+/// Match input similar to;
+///
+/// - `{% if value == true -%}`
+/// - `{% unless list contains 'thing' -%}`
+liquid__control_flow__branch__base__strip_trailing__start = _{
+    liquid__tag__open__plain
+  ~ liquid__tag_content__control_flow__branch__start
+  ~ liquid__tag__close__strip
+}
+
+/// Match input similar to;
+///
+/// - `{% elsif value == false -%}`
+liquid__control_flow__branch__base__strip_trailing__elsif = _{
+    liquid__tag__open__plain
+  ~ liquid__tag_content__control_flow__branch__elsif
+  ~ liquid__tag__close__strip
+}
+
+/// Match input similar to;
+///
+/// - `{% else -%}`
+liquid__control_flow__branch__base__strip_trailing__else = _{
+    liquid__tag__open__plain
+  ~ liquid__tag_content__control_flow__branch__else
+  ~ liquid__tag__close__strip
+}
+/* }}} */
+
+/* #### Strip both leading and trailing spaces variant of `if`, `elsif`, `else`, or `unless` common to all block regardless of `for` loops {{{ */
+/// Match input similar to;
+///
+/// - `{%- if value == true -%}`
+/// - `{%- unless list contains 'thing' -%}`
+liquid__control_flow__branch__base__strip_both__start = _{
+    liquid__tag__open__strip
+  ~ liquid__tag_content__control_flow__branch__start
+  ~ liquid__tag__close__strip
+}
+
+/// Match input similar to;
+///
+/// - `{%- elsif value == false -%}`
+liquid__control_flow__branch__base__strip_both__elsif = _{
+    liquid__tag__open__strip
+  ~ liquid__tag_content__control_flow__branch__elsif
+  ~ liquid__tag__close__strip
+}
+
+/// Match input similar to;
+///
+/// - `{%- else -%}`
+liquid__control_flow__branch__base__strip_both__else = _{
+    liquid__tag__open__strip
+  ~ liquid__tag_content__control_flow__branch__else
+  ~ liquid__tag__close__strip
+}
+/* }}} */
+/* }}} */
+
+/* ### Liquid control flow `if`, `elsif`, `else`, and `unless` blocks outside of `for` loops {{{ */
+liquid__block__control_flow__branch__outside_iteration = {
+    liquid__block__control_flow__branch__outside_iteration__plain
+  | liquid__block__control_flow__branch__outside_iteration__strip_leading
+  | liquid__block__control_flow__branch__outside_iteration__strip_trailing
+  | liquid__block__control_flow__branch__outside_iteration__strip_both
+}
+
+/* #### Non-stripped variant of `if` or `unless` blocks outside of `for` loops {{{ */
+/// Match input similar to;
+///
+/// - `if`
+///
+/// ```liquid
+/// {% if value == true %}
+///   The honest truth
+/// {% elsif value == false %}
+///   Totally falsey
+/// {% else %}
+///   Value ain't no Boolean
+/// {% endif %}
+/// ```
+///
+/// - `unless`
+///
+/// ```liquid
+/// {% unless value == true %}
+///   Anything but the truth
+/// {% elsif value == false %}
+///   Totally falsey
+/// {% else %}
+///   Value ain't no Boolean
+/// {% endunless %}
+/// ```
+liquid__block__control_flow__branch__outside_iteration__plain = ${
+    liquid__block_subsection__control_flow__branch__outside_iteration__plain__start
+  ~ liquid__block_subsection__control_flow__branch__outside_iteration__plain__elsif*
+  ~ liquid__block_subsection__control_flow__branch__outside_iteration__plain__else?
+  ~ liquid__tag__plain__end
+}
+
+/// Match input similar to;
+///
+/// - `{% if value == true %} ... content or more code...`
+/// - `{% unless list contains 'thing' %} ... content or more code...`
+liquid__block_subsection__control_flow__branch__outside_iteration__plain__start = ${
+    liquid__tag__control_flow__branch__base__plain__start
+  ~ block__outside_iteration*
+}
+
+/// Match input similar to;
+///
+/// - `{% elsif value == false %} ... content or more code...`
+liquid__block_subsection__control_flow__branch__outside_iteration__plain__elsif = ${
+    liquid__tag__control_flow__branch__base__plain__elsif
+  ~ block__outside_iteration*
+}
+
+/// Match input similar to;
+///
+/// - `{% else %} ... content or more code...`
+liquid__block_subsection__control_flow__branch__outside_iteration__plain__else = ${
+    liquid__tag__control_flow__branch__base__plain__else
+  ~ block__outside_iteration*
+}
+/* }}} */
+
+/* #### Strip leading spaces variant of `if` or `unless` blocks outside of `for` loops {{{ */
+/// Match input similar to;
+///
+/// - `if`
+///
+/// ```liquid
+/// {%- if value == true %}
+///   The honest truth
+/// {%- elsif value == false %}
+///   Totally falsey
+/// {%- else %}
+///   Value ain't no Boolean
+/// {%- endif %}
+/// ```
+///
+/// - `unless`
+///
+/// ```liquid
+/// {%- unless value == true %}
+///   Anything but the truth
+/// {%- elsif value == false %}
+///   Totally falsey
+/// {%- else %}
+///   Value ain't no Boolean
+/// {%- endunless %}
+/// ```
+liquid__block__control_flow__branch__outside_iteration__strip_leading = ${
+    liquid__block_subsection__control_flow__branch__outside_iteration__strip_leading__start
+  ~ liquid__block_subsection__control_flow__branch__outside_iteration__strip_leading__elsif*
+  ~ liquid__block_subsection__control_flow__branch__outside_iteration__strip_leading__else?
+  ~ liquid__tag__strip_leading__end
+}
+
+/// Match input similar to;
+///
+/// - `{%- if value == true %} ... content or more code...`
+/// - `{%- unless list contains 'thing' %} ... content or more code...`
+liquid__block_subsection__control_flow__branch__outside_iteration__strip_leading__start = ${
+    liquid__control_flow__branch__base__strip_leading__start
+  ~ block__outside_iteration*
+}
+
+/// Match input similar to;
+///
+/// - `{%- elsif value == false %} ... content or more code...`
+liquid__block_subsection__control_flow__branch__outside_iteration__strip_leading__elsif = ${
+    liquid__control_flow__branch__base__strip_leading__elsif
+  ~ block__outside_iteration*
+}
+
+/// Match input similar to;
+///
+/// - `{%- else %} ... content or more code...`
+liquid__block_subsection__control_flow__branch__outside_iteration__strip_leading__else = ${
+    liquid__control_flow__branch__base__strip_leading__else
+  ~ block__outside_iteration*
+}
+/* }}} */
+
+/* #### Strip trailing spaces variant of `if` or `unless` blocks outside of `for` loops {{{ */
+/// Match input similar to;
+///
+/// - `if`
+///
+/// ```liquid
+/// {% if value == true -%}
+///   The honest truth
+/// {% elsif value == false -%}
+///   Totally falsey
+/// {% else -%}
+///   Value ain't no Boolean
+/// {% endif -%}
+/// ```
+///
+/// - `unless`
+///
+/// ```liquid
+/// {% unless value == true -%}
+///   Anything but the truth
+/// {% elsif value == false -%}
+///   Totally falsey
+/// {% else -%}
+///   Value ain't no Boolean
+/// {% endunless -%}
+/// ```
+liquid__block__control_flow__branch__outside_iteration__strip_trailing = ${
+    liquid__block_subsection__control_flow__branch__outside_iteration__strip_trailing__start
+  ~ liquid__block_subsection__control_flow__branch__outside_iteration__strip_trailing__elsif*
+  ~ liquid__block_subsection__control_flow__branch__outside_iteration__strip_trailing__else?
+  ~ liquid__tag__strip_trailing__end
+}
+
+/// Match input similar to;
+///
+/// - `{% if value == true -%} ... content or more code...`
+/// - `{% unless list contains 'thing' -%} ... content or more code...`
+liquid__block_subsection__control_flow__branch__outside_iteration__strip_trailing__start = ${
+    liquid__control_flow__branch__base__strip_trailing__start
+  ~ block__outside_iteration*
+}
+
+/// Match input similar to;
+///
+/// - `{% elsif value == false -%} ... content or more code...`
+liquid__block_subsection__control_flow__branch__outside_iteration__strip_trailing__elsif = ${
+    liquid__control_flow__branch__base__strip_trailing__elsif
+  ~ block__outside_iteration*
+}
+
+/// Match input similar to;
+///
+/// - `{% else -%} ... content or more code...`
+liquid__block_subsection__control_flow__branch__outside_iteration__strip_trailing__else = ${
+    liquid__control_flow__branch__base__strip_trailing__else
+  ~ block__outside_iteration*
+}
+/* }}} */
+
+/* #### Strip both leading and trailing spaces variant of `if` or `unless` blocks outside of `for` loops {{{ */
+/// Match input similar to;
+///
+/// - `if`
+///
+/// ```liquid
+/// {%- if value == true -%}
+///   The honest truth
+/// {%- elsif value == false -%}
+///   Totally falsey
+/// {%- else -%}
+///   Value ain't no Boolean
+/// {%- endif -%}
+/// ```
+///
+/// - `unless`
+///
+/// ```liquid
+/// {%- unless value == true -%}
+///   Anything but the truth
+/// {%- elsif value == false -%}
+///   Totally falsey
+/// {%- else -%}
+///   Value ain't no Boolean
+/// {%- endunless -%}
+/// ```
+liquid__block__control_flow__branch__outside_iteration__strip_both = ${
+    liquid__block_subsection__control_flow__branch__outside_iteration__strip_both__start
+  ~ liquid__block_subsection__control_flow__branch__outside_iteration__strip_both__elsif*
+  ~ liquid__block_subsection__control_flow__branch__outside_iteration__strip_both__else?
+  ~ liquid__tag__strip_both__end
+}
+
+/// Match input similar to;
+///
+/// - `{%- if value == true -%} ... content or more code...`
+/// - `{%- unless list contains 'thing' -%} ... content or more code...`
+liquid__block_subsection__control_flow__branch__outside_iteration__strip_both__start = ${
+    liquid__control_flow__branch__base__strip_both__start
+  ~ block__outside_iteration*
+}
+
+/// Match input similar to;
+///
+/// - `{%- elsif value == false -%} ... content or more code...`
+liquid__block_subsection__control_flow__branch__outside_iteration__strip_both__elsif = ${
+    liquid__control_flow__branch__base__strip_both__elsif
+  ~ block__outside_iteration*
+}
+
+/// Match input similar to;
+///
+/// - `{%-else -%} ... content or more code...`
+liquid__block_subsection__control_flow__branch__outside_iteration__strip_both__else = ${
+    liquid__control_flow__branch__base__strip_both__else
+  ~ block__outside_iteration*
+}
+/* }}} */
+/* }}} */
+
+/* ### Liquid control flow `if`, `elsif`, `else`, and `unless` blocks within `for` loops {{{ */
+liquid__block__control_flow__branch__within_iteration = ${
+    liquid__block__control_flow__branch__within_iteration__plain
+  | liquid__block__control_flow__branch__within_iteration__strip_leading
+  | liquid__block__control_flow__branch__within_iteration__strip_trailing
+  | liquid__block__control_flow__branch__within_iteration__strip_both
+}
+
+/* #### Non-stripped variant of `if`, `elsif`, `else`, or `unless` block within `for` loops {{{ */
+/// Match input similar to;
+///
+/// - `if`
+///
+/// ```liquid
+/// {% for value in list %}
+///   {% if value == true %}
+///     The honest truth
+///   {% elsif value == false %}
+///     Totally falsey
+///   {% else %}
+///     Value ain't no Boolean
+///     {% break %}
+///   {% endif %}
+/// {% endfor %}
+/// ```
+///
+/// - `unless`
+///
+/// ```liquid
+/// {% for value in list %}
+///   {% unless value == true %}
+///     Anything but the truth
+///   {% elsif value == false %}
+///     Totally falsey
+///   {% else %}
+///     Value ain't no Boolean
+///     {% break %}
+///   {% endunless %}
+/// {% endfor %}
+/// ```
+liquid__block__control_flow__branch__within_iteration__plain = ${
+    liquid__block__control_flow__branch__within_iteration__plain__start
+  ~ liquid__block__control_flow__branch__within_iteration__plain__elsif*
+  ~ liquid__block_subsection__control_flow__branch__within_iteration__plain__else?
+  ~ liquid__tag__plain__end
+}
+
+/// Match input similar to;
+///
+/// - `{% if value == true %} ... content or more code...`
+/// - `{% unless list contains 'thing' %} ... content or more code...`
+liquid__block__control_flow__branch__within_iteration__plain__start = ${
+    liquid__tag__control_flow__branch__base__plain__start
+  ~ block__within_iteration*
+}
+
+/// Match input similar to;
+///
+/// - `{% elsif value == false %} ... content or more code...`
+liquid__block__control_flow__branch__within_iteration__plain__elsif = ${
+    liquid__tag__control_flow__branch__base__plain__elsif
+  ~ block__within_iteration*
+}
+
+/// Match input similar to;
+///
+/// - `{% else %} ... content or more code...`
+liquid__block_subsection__control_flow__branch__within_iteration__plain__else = ${
+    liquid__tag__control_flow__branch__base__plain__else
+  ~ block__within_iteration*
+}
+/* }}} */
+
+/* #### Strip leading spaces variant of `if`, `elsif`, `else`, or `unless` block within `for` loops {{{ */
+/// Match input similar to;
+///
+/// - `if`
+///
+/// ```liquid
+/// {%- for value in list %}
+///   {%- if value == true %}
+///     The honest truth
+///   {%- elsif value == false %}
+///     Totally falsey
+///   {%- else %}
+///     Value ain't no Boolean
+///     {%- break %}
+///   {%- endif %}
+/// {%- endfor %}
+/// ```
+///
+/// - `unless`
+///
+/// ```liquid
+/// {%- for value in list %}
+///   {%- unless value == true %}
+///     Anything but the truth
+///   {%- elsif value == false %}
+///     Totally falsey
+///   {%- else %}
+///     Value ain't no Boolean
+///     {%- break %}
+///   {%- endunless %}
+/// {%- endfor %}
+/// ```
+liquid__block__control_flow__branch__within_iteration__strip_leading = ${
+    liquid__block_subsection__control_flow__branch__within_iteration__strip_leading__start
+  ~ liquid__block_subsection__control_flow__branch__within_iteration__strip_leading__elsif*
+  ~ liquid__block_subsection__control_flow__branch__within_iteration__strip_leading__else?
+  ~ liquid__tag__strip_leading__end
+}
+
+/// Match input similar to;
+///
+/// - `{%- if value == true %} ... content or more code...`
+/// - `{%- unless list contains 'thing' %} ... content or more code...`
+liquid__block_subsection__control_flow__branch__within_iteration__strip_leading__start = ${
+    liquid__control_flow__branch__base__strip_leading__start
+  ~ block__within_iteration*
+}
+
+/// Match input similar to;
+///
+/// - `{%- elsif value == false %} ... content or more code...`
+liquid__block_subsection__control_flow__branch__within_iteration__strip_leading__elsif = ${
+    liquid__control_flow__branch__base__strip_leading__elsif
+  ~ block__within_iteration*
+}
+
+/// Match input similar to;
+///
+/// - `{%- else %} ... content or more code...`
+liquid__block_subsection__control_flow__branch__within_iteration__strip_leading__else = ${
+    liquid__control_flow__branch__base__strip_leading__else
+  ~ block__within_iteration*
+}
+/* }}} */
+
+/* #### Strip trailing spaces variant of `if`, `elsif`, `else`, or `unless` block within `for` loops {{{ */
+/// Match input similar to;
+///
+/// - `if`
+///
+/// ```liquid
+/// {% for value in list -%}
+///   {% if value == true -%}
+///     The honest truth
+///   {% elsif value == false -%}
+///     Totally falsey
+///   {% else -%}
+///     Value ain't no Boolean
+///     {% break -%}
+///   {% endif -%}
+/// {% endfor -%}
+/// ```
+///
+/// - `unless`
+///
+/// ```liquid
+/// {% for value in list -%}
+///   {% unless value == true -%}
+///     Anything but the truth
+///   {% elsif value == false -%}
+///     Totally falsey
+///   {% else -%}
+///     Value ain't no Boolean
+///     {% break -%}
+///   {% endunless -%}
+/// {% endfor -%}
+/// ```
+liquid__block__control_flow__branch__within_iteration__strip_trailing = ${
+    liquid__block_subsection__control_flow__branch__within_iteration__strip_trailing__start
+  ~ liquid__block_subsection__control_flow__branch__within_iteration__strip_trailing__elsif*
+  ~ liquid__block_subsection__control_flow__branch__within_iteration__strip_trailing__else?
+  ~ liquid__tag__strip_trailing__end
+}
+
+/// Match input similar to;
+///
+/// - `{% if value == true -%} ... content or more code...`
+/// - `{% unless list contains 'thing' -%} ... content or more code...`
+liquid__block_subsection__control_flow__branch__within_iteration__strip_trailing__start = ${
+    liquid__control_flow__branch__base__strip_trailing__start
+  ~ block__within_iteration*
+}
+
+/// Match input similar to;
+///
+/// - `{% elsif value == false -%} ... content or more code...`
+liquid__block_subsection__control_flow__branch__within_iteration__strip_trailing__elsif = ${
+    liquid__control_flow__branch__base__strip_trailing__elsif
+  ~ block__within_iteration*
+}
+
+/// Match input similar to;
+///
+/// - `{% else -%} ... content or more code...`
+liquid__block_subsection__control_flow__branch__within_iteration__strip_trailing__else = ${
+    liquid__control_flow__branch__base__strip_trailing__else
+  ~ block__within_iteration*
+}
+/* }}} */
+
+/* #### Strip both leading and trailing spaces variant of `if`, `elsif`, `else`, or `unless` block within `for` loops {{{ */
+/// Match input similar to;
+///
+/// - `if`
+///
+/// ```liquid
+/// {%- for value in list -%}
+///   {%- if value == true -%}
+///     The honest truth
+///   {%- elsif value == false -%}
+///     Totally falsey
+///   {%- else -%}
+///     Value ain't no Boolean
+///     {%- break -%}
+///   {%- endif -%}
+/// {%- endfor -%}
+/// ```
+///
+/// - `unless`
+///
+/// ```liquid
+/// {%- for value in list -%}
+///   {%- unless value == true -%}
+///     Anything but the truth
+///   {%- elsif value == false -%}
+///     Totally falsey
+///   {%- else -%}
+///     Value ain't no Boolean
+///     {%- break -%}
+///   {%- endunless -%}
+/// {%- endfor -%}
+/// ```
+liquid__block__control_flow__branch__within_iteration__strip_both = ${
+    liquid__block_subsection__control_flow__branch__within_iteration__strip_both__start
+  ~ liquid__block_subsection__control_flow__branch__within_iteration__strip_both__elsif*
+  ~ liquid__block_subsection__control_flow__branch__within_iteration__strip_both__else?
+  ~ liquid__tag__strip_both__end
+}
+
+/// Match input similar to;
+///
+/// - `{%- if value == true -%} ... content or more code...`
+/// - `{%- unless list contains 'thing' -%} ... content or more code...`
+liquid__block_subsection__control_flow__branch__within_iteration__strip_both__start = ${
+    liquid__control_flow__branch__base__strip_both__start
+  ~ block__within_iteration*
+}
+
+/// Match input similar to;
+///
+/// - `{%- elsif value == false -%} ... content or more code...`
+liquid__block_subsection__control_flow__branch__within_iteration__strip_both__elsif = ${
+    liquid__control_flow__branch__base__strip_both__elsif
+  ~ block__within_iteration*
+}
+
+/// Match input similar to;
+///
+/// - `{%-else -%} ... content or more code...`
+liquid__block_subsection__control_flow__branch__within_iteration__strip_both__else = ${
+    liquid__control_flow__branch__base__strip_both__else
+  ~ block__within_iteration*
+}
+/* }}} */
+/* }}} */
+
+/* ### Liquid control flow `if`, `elsif`, `else`, and `unless` common to any `liquid` tag regardless of `for` loops {{{ */
+/// Match `if site.env['production'] == true\n` from input similar to;
+///
+/// ```liquid
+/// {% liquid
+///   if site.env['production'] == true
+///     echo 'Is production'
+///   elsif site.env['production'] == false
+///     echo 'Not production'
+///   else
+///     echo 'Production undefined'
+///   endif
+/// %}
+/// ```
+liquid__tagged__control_flow__branch__start = _{
+    liquid__code__control_flow__branch__start
+  ~ NEWLINE
+}
+
+/// Match `elsif site.env['production'] == false\n` from input similar to;
+///
+/// ```liquid
+/// {% liquid
+///   if site.env['production'] == true
+///     echo 'Is production'
+///   elsif site.env['production'] == false
+///     echo 'Not production'
+///   else
+///     echo 'Production undefined'
+///   endif
+/// %}
+/// ```
+liquid__tagged__control_flow__branch__elsif = _{
+    liquid__code__control_flow__branch__elsif
+  ~ NEWLINE
+}
+
+/// Match `else\n` from input similar to;
+///
+/// ```liquid
+/// {% liquid
+///   if site.env['production'] == true
+///     echo 'Is production'
+///   elsif site.env['production'] == false
+///     echo 'Not production'
+///   else
+///     echo 'Production undefined'
+///   endif
+/// %}
+/// ```
+liquid__tagged__control_flow__branch__else = _{
+    liquid__code__control_flow__branch__else
+  ~ NEWLINE
+}
+/* }}} */
+
+/* ### Liquid control flow `if`, `elsif`, `else`, and `unless` within `liquid` tag and outside of `for` loop {{{ */
+/// Match `if site.env['production'] == true\n    echo 'Is production'` from
+/// input similar to;
+///
+/// ```liquid
+/// {% liquid
+///   if site.env['production'] == true
+///     echo 'Is production'
+///   elsif site.env['production'] == false
+///     echo 'Not production'
+///   else
+///     echo 'Production undefined'
+///   endif
+/// %}
+/// ```
+liquid__tagged_subsection__control_flow__branch__outside_iteration__start = ${
+    SPACE_OR_NEWLINE*
+  ~ liquid__tagged__control_flow__branch__start
+  ~ liquid__tagged__outside_iteration*
+}
+
+/// Match `elsif site.env['production'] == false\n    echo 'Not production'`
+/// from input similar to;
+///
+/// ```liquid
+/// {% liquid
+///   if site.env['production'] == true
+///     echo 'Is production'
+///   elsif site.env['production'] == false
+///     echo 'Not production'
+///   else
+///     echo 'Production undefined'
+///   endif
+/// %}
+/// ```
+liquid__tagged_subsection__control_flow__branch__outside_iteration__elsif = ${
+    SPACE_OR_NEWLINE*
+  ~ liquid__tagged__control_flow__branch__elsif
+  ~ liquid__tagged__outside_iteration*
+}
+
+/// Match `else\n    echo 'Production undefined'` from input similar to;
+///
+/// ```liquid
+/// {% liquid
+///   if site.env['production'] == true
+///     echo 'Is production'
+///   elsif site.env['production'] == false
+///     echo 'Not production'
+///   else
+///     echo 'Production undefined'
+///   endif
+/// %}
+/// ```
+liquid__tagged_subsection__control_flow__branch__outside_iteration__else = ${
+    SPACE_OR_NEWLINE*
+  ~ liquid__tagged__control_flow__branch__else
+  ~ liquid__tagged__outside_iteration*
+}
+
+/// Match between, and including, `if` `through `endif``
+///
+/// ```liquid
+/// {% liquid
+///   if site.env['production'] == true
+///     echo 'Is production'
+///   elsif site.env['production'] == false
+///     echo 'Not production'
+///   else
+///     echo 'Production undefined'
+///   endif
+/// %}
+/// ```
+liquid__tagged__control_flow__branch__outside_iteration = {
+    liquid__tagged_subsection__control_flow__branch__outside_iteration__start
+  ~ liquid__tagged_subsection__control_flow__branch__outside_iteration__elsif*
+  ~ liquid__tagged_subsection__control_flow__branch__outside_iteration__else?
+  ~ (
+        SPACE_OR_NEWLINE*
+      ~ liquid__code__end
+    )
+}
+/* }}} */
+
+/* ### Liquid control flow `if`, `elsif`, `else`, and `unless` within `liquid` tag and within of `for` loop {{{ */
+/// Match `if site.env['production'] == true\n      echo 'Ready to publish'`
+/// from input similar to;
+///
+/// ```liquid
+/// {% liquid
+///   for section in page.sections
+///     if section.publish == true
+///       echo 'Ready to publish'
+///     elsif section.publish == false
+///       echo 'Not ready to publish'
+///     else
+///       echo 'Publish undefined'
+///     endif
+///   endfor
+/// %}
+/// ```
+liquid__tagged_subsection__control_flow__branch__within_iteration__start = ${
+    SPACE_OR_NEWLINE*
+  ~ liquid__tagged__control_flow__branch__start
+  ~ liquid__tagged__within_iteration*
+}
+
+/// Match `elsif       echo 'Not ready to publish'` from input similar to;
+///
+/// ```liquid
+/// {% liquid
+///   for section in page.sections
+///     if section.publish == true
+///       echo 'Ready to publish'
+///     elsif section.publish == false
+///       echo 'Not ready to publish'
+///     else
+///       echo 'Publish undefined'
+///     endif
+///   endfor
+/// %}
+/// ```
+liquid__tagged_subsection__control_flow__branch__within_iteration__elsif = ${
+    SPACE_OR_NEWLINE*
+  ~ liquid__tagged__control_flow__branch__elsif
+  ~ liquid__tagged__within_iteration*
+}
+
+/// Match `else\n      echo 'Publish undefined'` from input similar to;
+///
+/// ```liquid
+/// {% liquid
+///   for section in page.sections
+///     if section.publish == true
+///       echo 'Ready to publish'
+///     elsif section.publish == false
+///       echo 'Not ready to publish'
+///     else
+///       echo 'Publish undefined'
+///     endif
+///   endfor
+/// %}
+/// ```
+liquid__tagged_subsection__control_flow__branch__within_iteration__else = ${
+    SPACE_OR_NEWLINE*
+  ~ liquid__tagged__control_flow__branch__else
+  ~ liquid__tagged__within_iteration*
+}
+
+/// Match between, and including, `if` `through `endif``
+///
+/// ```liquid
+/// {% liquid
+///   for section in page.sections
+///     if section.publish == true
+///       echo 'Ready to publish'
+///     elsif section.publish == false
+///       echo 'Not ready to publish'
+///     else
+///       echo 'Publish undefined'
+///     endif
+///   endfor
+/// %}
+/// ```
+liquid__tagged__control_flow__branch__within_iteration = {
+    liquid__tagged_subsection__control_flow__branch__within_iteration__start
+  ~ liquid__tagged_subsection__control_flow__branch__within_iteration__elsif*
+  ~ liquid__tagged_subsection__control_flow__branch__within_iteration__else?
+  ~ (
+        SPACE_OR_NEWLINE*
+      ~ liquid__code__end
+    )
+}
+/* }}} */
+/* }}} */
+
+/* ## Liquid control flow `case` and `when` -> https://shopify.github.io/liquid/tags/control-flow/#casewhen {{{ */
+/* ### Helpers specific to `case` keyword {{{ */
+liquid__key_word__control_flow__case = { "case" }
+liquid__key_word__control_flow__when = { "when" }
+
+/// Match and name the `site.collection` within input similar to;
+///
+/// - `{% case site.collection %}`
+liquid__control_flow__case__comparison__target = { liquid__type }
+
+/// Match ` or ` or `,` within;
+///
+/// - `{% when "cookie" or "biscuit" %}`
+/// - `{% when site.dessert,page.dessert %}`
+liquid__control_flow__case__comparison__operator__joiner = {
+    (SPACE_OR_NEWLINE+ ~ or ~ SPACE_OR_NEWLINE+)
+  | (SPACE_OR_NEWLINE* ~ comma ~ SPACE_OR_NEWLINE*)
+}
+
+/// Label `,` for clearer error messages
+comma = { "," }
+
+/// Label `:` for clearer error messages
+colon = { ":" }
+
+/// Match `"cookie", "biscuit"` or `site.dessert,page.dessert` values within;
+///
+/// - `{% when "cookie", "biscuit" %}`
+/// - `{% when site.dessert,page.dessert %}`
+liquid__control_flow__case__match_expression = {
+    liquid__type
+  ~ (
+      liquid__control_flow__case__comparison__operator__joiner
+    ~ liquid__type
+  )*
+}
+/* }}} */
+
+/* ### Liquid control flow `case` common to all blocks and `liquid` tag {{{ */
+/// Mutates stack by pushing `liquid__key_word__control_flow__case` onto stack
+///
+/// Match `case page.dessert` from input similar to;
+///
+/// - `{% case page.dessert %}`
+liquid__code__control_flow__case = {
+    PUSH(liquid__key_word__control_flow__case)
+  ~ SPACE_OR_NEWLINE+
+  ~ liquid__control_flow__case__comparison__target
+}
+
+/// Match `when "cookie", "biscuit` from input similar to;
+///
+/// - `{% when "cookie", "biscuit %}`
+liquid__code__control_flow__when = {
+    liquid__key_word__control_flow__when
+  ~ SPACE_OR_NEWLINE+
+  ~ liquid__control_flow__case__match_expression
+}
+/* }}} */
+
+/* ### Liquid control flow `case` and `when` common to all blocks regardless of `for` loops {{{ */
+/* #### Liquid control flow `case` tag content common to all blocks regardless of `for` loops {{{ */
+/// Match ` case page.dessert ` (with optional newlines and/or spaces) from
+/// input similar to;
+///
+/// - `{% case page.dessert %}`
+liquid__tag_content__control_flow__case__start = _{
+    SPACE_OR_NEWLINE*
+  ~ liquid__code__control_flow__case
+  ~ SPACE_OR_NEWLINE*
+}
+
+/// Match ` when "cookie", "biscuit ` (with optional newlines and/or spaces)
+/// input similar to;
+///
+/// - `{% when "cookie", "biscuit %}`
+liquid__tag_content__control_flow__case__when = _{
+    SPACE_OR_NEWLINE*
+  ~ liquid__code__control_flow__when
+  ~ SPACE_OR_NEWLINE*
+}
+/* }}} */
+
+/* ### Non-stripped variant of `case` common to all blocks regardless of `for` loops {{{ */
+/// Match input similar to;
+///
+/// - `{% case page.dessert %}`
+liquid__tag_content__control_flow__case__base__plain__start = _{
+    liquid__tag__open__plain
+  ~ liquid__tag_content__control_flow__case__start
+  ~ liquid__tag__close__plain
+}
+
+/// Match input similar to;
+///
+/// - `{% when "cookie", "biscuit %}`
+liquid__tag_content__control_flow__case__base__plain__when = _{
+    liquid__tag__open__plain
+  ~ liquid__tag_content__control_flow__case__when
+  ~ liquid__tag__close__plain
+}
+/* }}} */
+
+/* #### Strip leading spaces variant of `case` common to all blocks regardless of `for` loops {{{ */
+/// Match input similar to;
+///
+/// - `{%- case page.dessert %}`
+liquid__control_flow__case__base__strip_leading__start = _{
+    liquid__tag__open__strip
+  ~ liquid__tag_content__control_flow__case__start
+  ~ liquid__tag__close__plain
+}
+
+/// Match input similar to;
+///
+/// - `{%- when "cookie", "biscuit %}`
+liquid__control_flow__case__base__strip_leading__when = _{
+    liquid__tag__open__strip
+  ~ liquid__tag_content__control_flow__case__when
+  ~ liquid__tag__close__plain
+}
+/* }}} */
+
+/* #### Strip trailing spaces variant of `case` common to all blocks regardless of `for` loops {{{ */
+/// Mutates stack by pushing `liquid__key_word__control_flow__case` onto stack
+///
+/// Match input similar to;
+///
+/// - `{% case page.dessert -%}`
+liquid__control_flow__case__base__strip_trailing__start = _{
+    liquid__tag__open__plain
+  ~ liquid__tag_content__control_flow__case__start
+  ~ liquid__tag__close__strip
+}
+
+/// Match input similar to;
+///
+/// - `{% when "cookie", "biscuit -%}`
+liquid__control_flow__case__base__strip_trailing__when = _{
+    liquid__tag__open__plain
+  ~ liquid__tag_content__control_flow__case__when
+  ~ liquid__tag__close__strip
+}
+/* }}} */
+
+/* #### Strip both leading and trailing spaces variant of `case` common to all blocks regardless of `for` loops {{{ */
+/// Mutates stack by pushing `liquid__key_word__control_flow__case` onto stack
+///
+/// Match input similar to;
+///
+/// - `{%- case page.dessert -%}`
+liquid__control_flow__case__base__strip_both__start = _{
+    liquid__tag__open__strip
+  ~ liquid__tag_content__control_flow__case__start
+  ~ liquid__tag__close__strip
+}
+
+/// Match input similar to;
+///
+/// - `{%- when "cookie", "biscuit -%}`
+liquid__control_flow__case__base__strip_both__when = _{
+    liquid__tag__open__strip
+  ~ liquid__tag_content__control_flow__case__when
+  ~ liquid__tag__close__strip
+}
+/* }}} */
+/* }}} */
+
+/* ### Liquid control flow `case` and `when` block outside `for` loops {{{ */
+liquid__block__control_flow__case__outside_iteration = {
+    liquid__block__control_flow__case__outside_iteration__plain
+  | liquid__block__control_flow__case__outside_iteration__strip_leading
+  | liquid__block__control_flow__case__outside_iteration__strip_trailing
+  | liquid__block__control_flow__case__outside_iteration__strip_both
+}
+
+/* ### Non-stripped variant of `case` block outside `for` loops {{{ */
+/// Match input similar to;
+///
+/// ```liquid
+/// {% case page.dessert %}
+///   {% when site.dessert %}
+///      My favorite
+///   {% when "cookie", "biscuit" %}
+///      This is a cookie
+///   {% else %}
+///      This is not a cake nor a cookie
+/// {% endcase %}
+/// ```
+liquid__block__control_flow__case__outside_iteration__plain = {
+    liquid__tag_content__control_flow__case__base__plain__start
+  ~ SPACE_OR_NEWLINE*
+  ~ liquid__block__control_flow__case__outside_iteration__plain__when*
+  ~ liquid__block_subsection__control_flow__branch__outside_iteration__plain__else?
+  ~ liquid__tag__plain__end
+}
+
+/// Match input similar to;
+///
+/// - `{% when "cookie", "biscuit %} ... content or more code`
+liquid__block__control_flow__case__outside_iteration__plain__when = {
+    liquid__tag_content__control_flow__case__base__plain__when
+  ~ block__outside_iteration*
+}
+/* }}} */
+
+/* ### Strip leading spaces variant of `case` block outside `for` loops {{{ */
+/// Match input similar to;
+///
+/// ```liquid
+/// {%- case page.dessert %}
+///   {%- when site.dessert %}
+///      My favorite
+///   {%- when "cookie", "biscuit" %}
+///      This is a cookie
+///   {%- else %}
+///      This is not a cake nor a cookie
+/// {%- endcase %}
+/// ```
+liquid__block__control_flow__case__outside_iteration__strip_leading = {
+    liquid__control_flow__case__base__strip_leading__start
+  ~ SPACE_OR_NEWLINE*
+  ~ liquid__block__control_flow__case__outside_iteration__strip_leading__when*
+  ~ liquid__block_subsection__control_flow__branch__outside_iteration__strip_leading__else?
+  ~ liquid__tag__strip_leading__end
+}
+
+/// Match input similar to;
+///
+/// - `{%- when "cookie", "biscuit %} ... content or more code`
+liquid__block__control_flow__case__outside_iteration__strip_leading__when = {
+    liquid__control_flow__case__base__strip_leading__when
+  ~ block__outside_iteration*
+}
+/* }}} */
+
+/* ### Strip trailing spaces variant of `case` block outside `for` loops {{{ */
+/// Match input similar to;
+///
+/// ```liquid
+/// {% case page.dessert -%}
+///   {% when site.dessert -%}
+///      My favorite
+///   {% when "cookie", "biscuit" -%}
+///      This is a cookie
+///   {% else -%}
+///      This is not a cake nor a cookie
+/// {% endcase -%}
+/// ```
+liquid__block__control_flow__case__outside_iteration__strip_trailing = {
+    liquid__control_flow__case__base__strip_trailing__start
+  ~ SPACE_OR_NEWLINE*
+  ~ liquid__block__control_flow__case__outside_iteration__strip_trailing__when*
+  ~ liquid__block_subsection__control_flow__branch__outside_iteration__strip_trailing__else?
+  ~ liquid__tag__strip_trailing__end
+}
+
+/// Match input similar to;
+///
+/// - `{% when "cookie", "biscuit -%} ... content or more code`
+liquid__block__control_flow__case__outside_iteration__strip_trailing__when = {
+    liquid__control_flow__case__base__strip_trailing__when
+  ~ block__outside_iteration*
+}
+/* }}} */
+
+/* ### Strip both leading and trailing spaces variant of `case` block outside `for` loops {{{ */
+/// Match input similar to;
+///
+/// ```liquid
+/// {% case page.dessert -%}
+///   {% when site.dessert -%}
+///      My favorite
+///   {% when "cookie", "biscuit" -%}
+///      This is a cookie
+///   {% else -%}
+///      This is not a cake nor a cookie
+/// {% endcase -%}
+/// ```
+liquid__block__control_flow__case__outside_iteration__strip_both = {
+    liquid__control_flow__case__base__strip_both__start
+  ~ SPACE_OR_NEWLINE*
+  ~ liquid__block__control_flow__case__outside_iteration__strip_both__when*
+  ~ liquid__block_subsection__control_flow__branch__outside_iteration__strip_both__else?
+  ~ liquid__tag__strip_both__end
+}
+
+/// Match input similar to;
+///
+/// - `{% when "cookie", "biscuit -%} ... content or more code`
+liquid__block__control_flow__case__outside_iteration__strip_both__when = {
+    liquid__control_flow__case__base__strip_both__when
+  ~ block__outside_iteration*
+}
+/* }}} */
+/* }}} */
+
+/* ### Liquid control flow `case` and `when` block within `for` loops {{{ */
+liquid__block__control_flow__case__within_iteration = {
+    liquid__block__control_flow__case__within_iteration__plain
+  | liquid__block__control_flow__case__within_iteration__strip_leading
+  | liquid__block__control_flow__case__within_iteration__strip_trailing
+  | liquid__block__control_flow__case__within_iteration__strip_both
+}
+
+/* ### Non-stripped variant of `case` block within `for` loops {{{ */
+/// Match input similar to;
+///
+/// ```liquid
+/// {% for page in site.pages %}
+///   {% case page.dessert %}
+///     {% when site.dessert %}
+///        My favorite
+///     {% when "cookie", "biscuit" %}
+///        This is a cookie
+///     {% else %}
+///        {% continue %}
+///   {% endcase %}
+/// {% endfor %}
+/// ```
+liquid__block__control_flow__case__within_iteration__plain = {
+    liquid__tag_content__control_flow__case__base__plain__start
+  ~ SPACE_OR_NEWLINE*
+  ~ liquid__block__control_flow__case__within_iteration__plain__when*
+  ~ liquid__block_subsection__control_flow__branch__within_iteration__plain__else?
+  ~ liquid__tag__plain__end
+}
+
+/// Match input similar to;
+///
+/// - `{% when "cookie", "biscuit %} ... content or more code`
+liquid__block__control_flow__case__within_iteration__plain__when = {
+    liquid__tag_content__control_flow__case__base__plain__when
+  ~ block__within_iteration*
+}
+/* }}} */
+
+/* ### Strip leading spaces variant of `case` block within `for` loops {{{ */
+/// Match input similar to;
+///
+/// ```liquid
+/// {%- for page in site.pages %}
+///   {%- case page.dessert %}
+///     {%- when site.dessert %}
+///        My favorite
+///     {%- when "cookie", "biscuit" %}
+///        This is a cookie
+///     {%- else %}
+///        This is not a cake nor a cookie
+///   {%- endcase %}
+/// {%- endfor %}
+/// ```
+liquid__block__control_flow__case__within_iteration__strip_leading = {
+    liquid__control_flow__case__base__strip_leading__start
+  ~ SPACE_OR_NEWLINE*
+  ~ liquid__block__control_flow__case__within_iteration__strip_leading__when*
+  ~ liquid__block_subsection__control_flow__branch__within_iteration__strip_leading__else?
+  ~ liquid__tag__strip_leading__end
+}
+
+/// Match input similar to;
+///
+/// - `{%- when "cookie", "biscuit %} ... content or more code`
+liquid__block__control_flow__case__within_iteration__strip_leading__when = {
+    liquid__control_flow__case__base__strip_leading__when
+  ~ block__within_iteration*
+}
+/* }}} */
+
+/* ### Strip trailing spaces variant of `case` block within `for` loops {{{ */
+/// Match input similar to;
+///
+/// ```liquid
+/// {% for page in site.pages -%}
+///   {% case page.dessert -%}
+///     {% when site.dessert -%}
+///        My favorite
+///     {% when "cookie", "biscuit" -%}
+///        This is a cookie
+///     {% else -%}
+///        This is not a cake nor a cookie
+///   {% endcase -%}
+/// {% endfor -%}
+/// ```
+liquid__block__control_flow__case__within_iteration__strip_trailing = {
+    liquid__control_flow__case__base__strip_trailing__start
+  ~ SPACE_OR_NEWLINE*
+  ~ liquid__block__control_flow__case__within_iteration__strip_trailing__when*
+  ~ liquid__block_subsection__control_flow__branch__within_iteration__strip_trailing__else?
+  ~ liquid__tag__strip_trailing__end
+}
+
+/// Match input similar to;
+///
+/// - `{% when "cookie", "biscuit -%} ... content or more code`
+liquid__block__control_flow__case__within_iteration__strip_trailing__when = {
+    liquid__control_flow__case__base__strip_trailing__when
+  ~ block__within_iteration*
+}
+/* }}} */
+
+/* ### Strip both leading and trailing spaces variant of `case` block within `for` loops {{{ */
+/// Match input similar to;
+///
+/// ```liquid
+/// {%- for page in site.pages -%}
+///   {%- case page.dessert -%}
+///     {%- when site.dessert -%}
+///        My favorite
+///     {%- when "cookie", "biscuit" -%}
+///        This is a cookie
+///     {%- else -%}
+///        This is not a cake nor a cookie
+///   {%- endcase -%}
+/// {%- endfor -%}
+/// ```
+liquid__block__control_flow__case__within_iteration__strip_both = {
+    liquid__control_flow__case__base__strip_both__start
+  ~ SPACE_OR_NEWLINE*
+  ~ liquid__block__control_flow__case__within_iteration__strip_both__when*
+  ~ liquid__block_subsection__control_flow__branch__within_iteration__strip_both__else?
+  ~ liquid__tag__strip_both__end
+}
+
+/// Match input similar to;
+///
+/// - `{% when "cookie", "biscuit -%} ... content or more code`
+liquid__block__control_flow__case__within_iteration__strip_both__when = {
+    liquid__control_flow__case__base__strip_both__when
+  ~ block__within_iteration*
+}
+/* }}} */
+/* }}} */
+
+/* ### Liquid control flow `case` and `when` common to any `liquid` tag regardless of `for` loops {{{ */
+liquid__tagged__control_flow__case__start = {
+    liquid__code__control_flow__case
+  ~ NEWLINE
+}
+
+liquid__tagged__control_flow__case__when = {
+    liquid__code__control_flow__when
+  ~ NEWLINE
+}
+/* }}} */
+
+/* ### Liquid control flow `case` and `when` within `liquid` tag and outside of `for` loop {{{ */
+/// Match `case section.blocks.size\n` from input similar to;
+///
+/// ```liquid
+/// {% liquid
+///   case section.blocks.size
+///     when 1
+///       assign column_size = ''
+///     when 2
+///       assign column_size = 'one-half'
+///     when 3
+///       assign column_size = 'one-third'
+///     else
+///       assign column_size = 'one-quarter'
+///   endcase
+/// %}
+/// ```
+liquid__tagged_subsection__control_flow__case__outside_iteration__start = ${
+    SPACE_OR_NEWLINE*
+  ~ liquid__tagged__control_flow__case__start
+}
+
+/// Match `when 1\n      assign column_size = ''` from input similar to;
+///
+/// ```liquid
+/// {% liquid
+///   case section.blocks.size
+///     when 1
+///       assign column_size = ''
+///     when 2
+///       assign column_size = 'one-half'
+///     when 3
+///       assign column_size = 'one-third'
+///     else
+///       assign column_size = 'one-quarter'
+///   endcase
+/// %}
+/// ```
+liquid__tagged_subsection__control_flow__case__outside_iteration__when = ${
+    SPACE_OR_NEWLINE*
+  ~ liquid__tagged__control_flow__case__when
+  ~ liquid__tagged__outside_iteration*
+}
+
+/// Match between, and including, `if` `through `endif``
+///
+/// ```liquid
+/// {% liquid
+///   case section.blocks.size
+///     when 1
+///       assign column_size = ''
+///     when 2
+///       assign column_size = 'one-half'
+///     when 3
+///       assign column_size = 'one-third'
+///     else
+///       assign column_size = 'one-quarter'
+///   endcase
+/// %}
+/// ```
+liquid__tagged__control_flow__case__outside_iteration = {
+    liquid__tagged_subsection__control_flow__case__outside_iteration__start
+  ~ liquid__tagged_subsection__control_flow__case__outside_iteration__when*
+  ~ liquid__tagged_subsection__control_flow__branch__outside_iteration__else?
+  ~ (
+        SPACE_OR_NEWLINE*
+      ~ liquid__code__end
+    )
+}
+/* }}} */
+
+/* ### Liquid control flow `case` and `when` within `liquid` tag and outside of `for` loop {{{ */
+/// Match `case section.blocks.size\n` from input similar to;
+///
+/// ```liquid
+/// {% liquid
+/// for section in page.sections
+///     case section.blocks.size
+///       when 1
+///         assign column_size = ''
+///       when 2
+///         assign column_size = 'one-half'
+///       when 3
+///         assign column_size = 'one-third'
+///       else
+///         assign column_size = 'one-quarter'
+///     endcase
+/// endfor
+/// %}
+/// ```
+liquid__tagged_subsection__control_flow__case__within_iteration__start = ${
+    SPACE_OR_NEWLINE*
+  ~ liquid__tagged__control_flow__case__start
+}
+
+/// Match `when 1\n      assign column_size = ''` from input similar to;
+///
+/// ```liquid
+/// {% liquid
+/// for section in page.sections
+///     case section.blocks.size
+///       when 1
+///         assign column_size = ''
+///       when 2
+///         assign column_size = 'one-half'
+///       when 3
+///         assign column_size = 'one-third'
+///       else
+///         assign column_size = 'one-quarter'
+///     endcase
+/// endfor
+/// %}
+/// ```
+liquid__tagged_subsection__control_flow__case__within_iteration__when = ${
+    SPACE_OR_NEWLINE*
+  ~ liquid__tagged__control_flow__case__when
+  ~ liquid__tagged__within_iteration*
+}
+
+/// Match between, and including, `if` `through `endif``
+///
+/// ```liquid
+/// {% liquid
+/// for section in page.sections
+///     case section.blocks.size
+///       when 1
+///         assign column_size = ''
+///       when 2
+///         assign column_size = 'one-half'
+///       when 3
+///         assign column_size = 'one-third'
+///       else
+///         assign column_size = 'one-quarter'
+///     endcase
+/// endfor
+/// %}
+/// ```
+liquid__tagged__control_flow__case__within_iteration = {
+    liquid__tagged_subsection__control_flow__case__within_iteration__start
+  ~ liquid__tagged_subsection__control_flow__case__within_iteration__when*
+  ~ liquid__tagged_subsection__control_flow__branch__within_iteration__else?
+  ~ (
+        SPACE_OR_NEWLINE*
+      ~ liquid__code__end
+    )
+}
+/* }}} */
+/* }}} */
+
+/* ## Liquid iteration -> https://shopify.github.io/liquid/tags/iteration/ {{{ */
+/* ### Liquid reserved words and sytax for iteration such as `for` and `tablerow` {{{ */
+liquid__key_word__iteration__for = { "for" }
+liquid__key_word__iteration__continue = { "continue" }
+liquid__key_word__iteration__break = { "break" }
+
+/* #### Shared between `for` and `tablerow` {{{ */
+/// Match and name `(1..5)` or `(object.start..object['end'])` from inputs similar to;
+///
+/// - `{% for i in (1..5) %}`
+/// - `{% for i in (object.start..object['end']) %}`
+/// - `{% tablerow i in (1..5) %}`
+/// - `{% tablerow i in (object.start..object['end']) %}`
+liquid__code__iteration__range = ${ parenthese__open ~ (number|object) ~ ".." ~ (number|object) ~ parenthese__close }
+
+/// Match and name `limit:<VALUE>` from inputs similar to;
+///
+/// - `{% for collection in site.collection limit:42 %}`
+/// - `{% for collection in site.collection limit:includes['number_prop'] %}`
+/// - `{% tablerow product in collection.products limit:42 %}`
+/// - `{% tablerow product in collection.products limit:includes['number_prop'] %}`
+liquid__code__iteration__parameter__limit = ${ "limit:" ~ (number|object) }
+
+/// Match and name `(1..4)` or `site.collection` from inputs similar to;
+///
+/// - `{% for i in (1..4) %}`
+/// - `{% for collection in site.collection %}`
+liquid__code__iteration__target = { liquid__code__iteration__range | object }
+/* }}} */
+
+/* #### Parameters specific to `for` {{{ */
+/// Match inputs similar to;
+///
+/// - `limit:42`
+/// - `limit:includes['number_prop']`
+/// - `offset:42`
+/// - `offset:includes['number_prop']`
+/// - `offset:continue`
+/// - `reversed`
+liquid__code__iteration__for__parameter = {
+    liquid__code__iteration__parameter__limit
+  | liquid__code__iteration__for__parameter__offset
+  | liquid__code__iteration__for__parameter__reversed
+}
+
+/// Match and name `offset:<VALUE>` from inputs similar to;
+///
+/// - `{% for collection in site.collection offset:42 %}`
+/// - `{% for collection in site.collection offset:includes['number_prop'] %}`
+/// - `{% for collection in site.collection offset:continue %}`
+liquid__code__iteration__for__parameter__offset = ${
+    "offset:"
+  ~ (
+        number
+      | ("continue" ~ !("." | bracket__square__open))
+      | object
+    )
+}
+
+/// Match and name `reversed` from inputs similar to;
+///
+/// - `{% for i in (1..4) reversed %}`
+liquid__code__iteration__for__parameter__reversed = ${ "reversed" }
+/* }}} */
+
+/* #### Control `for` loop behaviors and reserved tags {{{ */
+/// Match inputs similar to `{%- continue -%}` or `{% continue %}`
+liquid__tag__iteration__for__continue = @{
+    (liquid__tag__open__strip | liquid__tag__open__plain)
+  ~ SPACE_OR_NEWLINE*
+  ~ liquid__key_word__iteration__continue
+  ~ SPACE_OR_NEWLINE*
+  ~ (liquid__tag__close__strip | liquid__tag__close__plain)
+}
+
+/// Match inputs similar to `{%- break -%}` or `{% break %}`
+liquid__tag__iteration__for__break = @{
+    (liquid__tag__open__strip | liquid__tag__open__plain)
+  ~ SPACE_OR_NEWLINE*
+  ~ liquid__key_word__iteration__break
+  ~ SPACE_OR_NEWLINE*
+  ~ (liquid__tag__close__strip | liquid__tag__close__plain)
+}
+/* }}} */
+/* }}} */
+
+/* ### Liquid iteration `for` common to blocks and `liquid` tag {{{ */
+/// Mutates stack by pushing `for` onto stack
+///
+/// Match `for collection in site.collection limit:2 reversed` from input similar to;
+///
+/// - `{% for collection in site.collection limit:2 reversed %} ... content or more code...`
+liquid__code__iteration__for__start = _{
+    PUSH(liquid__key_word__iteration__for)
+  ~ SPACE_OR_NEWLINE+
+  ~ object__word
+  ~ SPACE_OR_NEWLINE+
+  ~ "in"
+  ~ SPACE_OR_NEWLINE+
+  ~ liquid__code__iteration__target
+  ~ (SPACE_OR_NEWLINE+ ~ liquid__code__iteration__for__parameter)*
+}
+/* }}} */
+
+/* ### Liquid iteration `for` common to all blocks {{{ */
+/// Match ` for collection in site.collection limit:2 reversed ` from input similar to;
+///
+/// - `{% for collection in site.collection limit:2 reversed %} ... content or more code...`
+liquid__tag_content__iteration__for__start = _{
+    SPACE_OR_NEWLINE*
+  ~ liquid__code__iteration__for__start
+  ~ SPACE_OR_NEWLINE*
+}
+/* }}} */
+
+/* ### Iteration `for` block {{{ */
+liquid__block__iteration__for = {
+    liquid__block__iteration__for__plain
+  | liquid__block__iteration__for__strip_leading
+  | liquid__block__iteration__for__strip_trailing
+  | liquid__block__iteration__for__strip_both
+}
+
+/* #### Non-stripped variant of `for` loop block {{{ */
+/// Match input similar to
+///
+/// ```liquid
+/// {% for collection in site.collection %}
+///   Collection name: {{ collection.name }}
+/// {% else %}
+///   No collections
+/// {% endfor %}
+/// ```
+liquid__block__iteration__for__plain = ${
+    liquid__block_subsection__iteration__for__plain__start
+  ~ liquid__block_subsection__control_flow__branch__within_iteration__plain__else?
+  ~ liquid__tag__plain__end
+}
+
+/// Match input similar to;
+///
+/// - `{% for collection in site.collection %} ... content or more code...`
+/// - `{% for collection in (1..5) limit:2 reversed %} ... content or more code...`
+liquid__block_subsection__iteration__for__plain__start = ${
+    liquid__tag__open__plain
+  ~ liquid__tag_content__iteration__for__start
+  ~ liquid__tag__close__plain
+  ~ block__within_iteration*
+}
+/* }}} */
+
+/* #### Strip leading spaces variant of `for` loop block {{{ */
+/// Match input similar to
+///
+/// ```liquid
+/// {%- for collection in site.collection %}
+///   Collection name: {{ collection.name }}
+/// {%- else %}
+///   No collections
+/// {%- endfor %}
+/// ```
+liquid__block__iteration__for__strip_leading = ${
+    liquid__block_subsection__iteration__for__strip_leading__start
+  ~ liquid__block_subsection__control_flow__branch__within_iteration__strip_leading__else?
+  ~ liquid__tag__strip_leading__end
+}
+
+/// Match input similar to;
+///
+/// - `{%- for collection in site.collection %} ... content or more code...`
+/// - `{%- for collection in (1..5) limit:2 reversed %} ... content or more code...`
+liquid__block_subsection__iteration__for__strip_leading__start = ${
+    liquid__tag__open__strip
+  ~ liquid__tag_content__iteration__for__start
+  ~ liquid__tag__close__plain
+  ~ block__within_iteration*
+}
+/* }}} */
+
+/* #### Strip trailing variant of `for` loop block {{{ */
+/// Match input similar to
+///
+/// ```liquid
+/// {% for collection in site.collection -%}
+///   Collection name: {{ collection.name }}
+/// {% else -%}
+///   No collections
+/// {% endfor -%}
+/// ```
+liquid__block__iteration__for__strip_trailing = ${
+    liquid__block_subsection__iteration__for__strip_trailing__start
+  ~ liquid__block_subsection__control_flow__branch__within_iteration__strip_trailing__else?
+  ~ liquid__tag__strip_trailing__end
+}
+
+/// Match input similar to;
+///
+/// - `{% for collection in site.collection -%} ... content or more code...`
+/// - `{% for collection in (1..5) limit:2 reversed -%} ... content or more code...`
+liquid__block_subsection__iteration__for__strip_trailing__start = ${
+    liquid__tag__open__plain
+  ~ liquid__tag_content__iteration__for__start
+  ~ liquid__tag__close__strip
+  ~ block__within_iteration*
+}
+/* }}} */
+
+/* #### Strip both leading and trailing spaces variant of `for` loop block {{{ */
+/// Match input similar to
+///
+/// ```liquid
+/// {%- for collection in site.collection -%}
+///   Collection name: {{ collection.name }}
+/// {%- else -%}
+///   No collections
+/// {%- endfor -%}
+/// ```
+liquid__block__iteration__for__strip_both = ${
+    liquid__block_subsection__iteration__for__strip_both__start
+  ~ liquid__block_subsection__control_flow__branch__within_iteration__strip_both__else?
+  ~ liquid__tag__strip_both__end
+}
+
+/// Match input similar to;
+///
+/// - `{%- for collection in site.collection -%} ... content or more code...`
+/// - `{%- for collection in (1..5) limit:2 reversed -%} ... content or more code...`
+liquid__block_subsection__iteration__for__strip_both__start = ${
+    liquid__tag__open__strip
+  ~ liquid__tag_content__iteration__for__start
+  ~ liquid__tag__close__strip
+  ~ liquid__block__within_iteration*
+}
+/* }}} */
+/* }}} */
+
+/* ### Iteration `for` within `liquid` tag {{{ */
+/// Match `for i in (1..5)\n` from input similar to the following
+/// within `liquid` tag;
+///
+/// ```liquid
+/// for i in (1..5)
+///   echo i
+/// endfor
+/// ```
+liquid__tagged__iteration__for__start = ${
+    liquid__code__iteration__for__start
+  ~ NEWLINE
+}
+
+/// Match `for i in (1..5)\n  echo i` from input similar to the following
+/// within `liquid` tag;
+///
+/// ```liquid
+/// for i in (1..5)
+///   echo i
+/// endfor
+/// ```
+liquid__tagged_subsection__iteration__for__start = ${
+    SPACE_OR_NEWLINE*
+  ~ liquid__tagged__iteration__for__start
+  ~ liquid__tagged__within_iteration*
+}
+
+/// Match input similar to the following within `liquid` tag
+///
+/// ```liquid
+/// for i in (1..5)
+///   echo i
+/// endfor
+/// ```
+liquid__tagged__iteration__for = ${
+    liquid__tagged_subsection__iteration__for__start
+  ~ liquid__tagged_subsection__control_flow__branch__within_iteration__else?
+  ~ (
+        SPACE_OR_NEWLINE*
+      ~ liquid__code__end
+    )
+}
+/* }}} */
+
+/* ### Iteration `tablerow` {{{ */
+/* #### Helpers and parameters specific to `tablerow` {{{ */
+liquid__key_word__iteration__tablerow = { "tablerow" }
+
+/// Match inputs similar to;
+///
+/// - `limit:42`
+/// - `limit:includes['number_prop']`
+/// - `cols:42`
+/// - `cols:includes['number_prop']`
+/// - `offset:42`
+/// - `offset:includes['number_prop']`
+liquid__code__iteration__tablerow__parameter = {
+  liquid__code__iteration__parameter__limit
+    | liquid__code__iteration__tablerow__parameter__cols
+    | liquid__code__iteration__tablerow__parameter__offset
+}
+
+/// Match and name `cols:<VALUE>` from inputs similar to;
+///
+/// - `{% tablerow product in collection.products cols:2 %}`
+/// - `{% tablerow product in collection.products cols:includes['number_prop'] %}`
+liquid__code__iteration__tablerow__parameter__cols = ${ "cols:" ~ (number|object) }
+
+/// Match and name `offset:<VALUE>` from inputs similar to;
+///
+/// - `{% tablerow product in collection.products offset:42 %}`
+/// - `{% tablerow product in collection.products offset:includes['number_prop'] %}`
+liquid__code__iteration__tablerow__parameter__offset = ${ "offset:" ~ (number|object) }
+/* }}} */
+
+/* #### Liquid `tablerow` common to blocks and `liquid` tag {{{ */
+/// Mutates stack by pushing `liquid__key_word__iteration__tablerow` onto stack
+///
+/// Match `tablerow product in collection.products` from inputs similar to;
+///
+/// - `{% tablerow product in collection.products %} ... content or more code...`
+/// - `{% tablerow product in (1..5) limit:2 %} ... content or more code...`
+liquid__code__iteration__tablerow__start = _{
+    PUSH(liquid__key_word__iteration__tablerow)
+  ~ SPACE_OR_NEWLINE+
+  ~ object__word
+  ~ SPACE_OR_NEWLINE+
+  ~ "in"
+  ~ SPACE_OR_NEWLINE+
+  ~ liquid__code__iteration__target
+  ~ (SPACE_OR_NEWLINE+ ~ liquid__code__iteration__tablerow__parameter)*
+}
+/* }}} */
+
+/* #### Liquid `tablerow` common to blocks {{{ */
+/// Match ` tablerow product in collection.products ` from inputs similar to;
+///
+/// - `{% tablerow product in collection.products %}`
+/// - `{% tablerow product in (1..5) limit:2 %}`
+liquid__tag_content__iteration__tablerow__start = _{
+    SPACE_OR_NEWLINE*
+  ~ liquid__code__iteration__tablerow__start
+  ~ SPACE_OR_NEWLINE*
+}
+/* }}} */
+
+/* #### Liquid `tablerow` block common regardless of `for` loops {{{ */
+/* ##### Non-stripped variant of `tablerow` common regardless of `for` loops {{{ */
+/// Match input similar to;
+///
+/// - `{% tablerow product in collection.products %}`
+/// - `{% tablerow product in (1..5) limit:2 %}`
+liquid__tag__iteration__tablerow__base__plain__start = {
+    liquid__tag__open__plain
+  ~ liquid__tag_content__iteration__tablerow__start
+  ~ liquid__tag__close__plain
+}
+/* }}} */
+
+/* ##### Strip leading spaces variant of `tablerow` common regardless of `for` loops {{{ */
+/// Match input similar to;
+///
+/// - `{% tablerow product in collection.products %}`
+/// - `{% tablerow product in (1..5) limit:2 %}`
+liquid__tag__iteration__tablerow__base__strip_leading__start = {
+    liquid__tag__open__strip
+  ~ liquid__tag_content__iteration__tablerow__start
+  ~ liquid__tag__close__plain
+}
+/* }}} */
+
+/* ##### Strip trailing spaces variant of `tablerow` common regardless of `for` loops {{{ */
+/// Match input similar to;
+///
+/// - `{% tablerow product in collection.products -%}`
+/// - `{% tablerow product in (1..5) limit:2 -%}`
+liquid__tag__iteration__tablerow__base__strip_trailing__start = {
+    liquid__tag__open__plain
+  ~ liquid__tag_content__iteration__tablerow__start
+  ~ liquid__tag__close__strip
+}
+/* }}} */
+
+/* ##### Strip both leading and trailing spaces variant of `tablerow` common regardless of `for` loops {{{ */
+/// Match input similar to;
+///
+/// - `{%- tablerow product in collection.products -%}`
+/// - `{%- tablerow product in (1..5) limit:2 -%}`
+liquid__tag__iteration__tablerow__base__strip_both__start = {
+    liquid__tag__open__plain
+  ~ liquid__tag_content__iteration__tablerow__start
+  ~ liquid__tag__close__strip
+}
+/* }}} */
+/* }}} */
+
+/* #### Liquid `tablerow` block outside `for` loops {{{ */
+liquid__block__iteration__tablerow__outside_iteration = {
+    liquid__block__iteration__tablerow__outside_iteration__plain
+  | liquid__block__iteration__tablerow__outside_iteration__strip_leading
+  | liquid__block__iteration__tablerow__outside_iteration__strip_trailing
+  | liquid__block__iteration__tablerow__outside_iteration__strip_both
+}
+
+/* ##### Non-stripped variant of `tablerow` outside `for` loops {{{ */
+/// Match `{% tablerow product in collection.products %}\n  Product title: {{ product.title }}`
+/// from input similar to;
+///
+/// ```liquid
+/// {% tablerow product in collection.products %}
+///   Product title: {{ product.title }}
+/// {% endtablerow %}
+/// ```
+liquid__block_subsection__iteration__tablerow__outside_iteration__plain__start = ${
+    liquid__tag__iteration__tablerow__base__plain__start
+  ~ block__outside_iteration*
+}
+
+/// Match input similar to;
+///
+/// ```liquid
+/// {% tablerow product in collection.products %}
+///   Product title: {{ product.title }}
+/// {% endtablerow %}
+/// ```
+liquid__block__iteration__tablerow__outside_iteration__plain = ${
+    liquid__block_subsection__iteration__tablerow__outside_iteration__plain__start
+  ~ liquid__tag__plain__end
+}
+/* }}} */
+
+/* ##### Strip leading spaces variant of `tablerow` outside `for` loops {{{ */
+/// Match `{%- tablerow product in collection.products %}\n  Product title: {{ product.title }}`
+/// from input similar to;
+///
+/// ```liquid
+/// {%- tablerow product in collection.products %}
+///   Product title: {{ product.title }}
+/// {%- endtablerow %}
+/// ```
+liquid__block_subsection__iteration__tablerow__outside_iteration__strip_leading__start = ${
+    liquid__tag__iteration__tablerow__base__strip_leading__start
+  ~ block__outside_iteration*
+}
+
+/// Match input similar to;
+///
+/// ```liquid
+/// {%- tablerow product in collection.products %}
+///   Product title: {{ product.title }}
+/// {%- endtablerow %}
+/// ```
+liquid__block__iteration__tablerow__outside_iteration__strip_leading = ${
+    liquid__block_subsection__iteration__tablerow__outside_iteration__strip_leading__start
+  ~ liquid__tag__plain__end
+}
+/* }}} */
+
+/* ##### Strip trailing spaces variant of `tablerow` outside `for` loops {{{ */
+/// Match `{% tablerow product in collection.products -%}\n  Product title: {{ product.title }}`
+/// from input similar to;
+///
+/// ```liquid
+/// {% tablerow product in collection.products -%}
+///   Product title: {{ product.title }}
+/// {% endtablerow -%}
+/// ```
+liquid__block_subsection__iteration__tablerow__outside_iteration__strip_trailing__start = ${
+    liquid__tag__iteration__tablerow__base__strip_trailing__start
+  ~ block__outside_iteration*
+}
+
+/// Match input similar to;
+///
+/// ```liquid
+/// {% tablerow product in collection.products -%}
+///   Product title: {{ product.title }}
+/// {% endtablerow -%}
+/// ```
+liquid__block__iteration__tablerow__outside_iteration__strip_trailing = {
+    liquid__block_subsection__iteration__tablerow__outside_iteration__strip_trailing__start
+  ~ liquid__tag__strip_trailing__end
+}
+/* }}} */
+
+/* ##### Strip both leading and trailing spaces variant of `tablerow` outside `for` loops {{{ */
+/// Match `{%- tablerow product in collection.products -%}\n  Product title: {{ product.title }}`
+/// from input similar to;
+///
+/// ```liquid
+/// {%- tablerow product in collection.products -%}
+///   Product title: {{ product.title }}
+/// {%- endtablerow -%}
+/// ```
+liquid__block_subsection__iteration__tablerow__outside_iteration__strip_both__start = ${
+    liquid__tag__iteration__tablerow__base__strip_both__start
+  ~ block__outside_iteration*
+}
+
+/// Match input similar to;
+///
+/// ```liquid
+/// {%- tablerow product in collection.products -%}
+///   Product title: {{ product.title }}
+/// {%- endtablerow -%}
+/// ```
+liquid__block__iteration__tablerow__outside_iteration__strip_both = {
+    liquid__block_subsection__iteration__tablerow__outside_iteration__strip_both__start
+  ~ liquid__tag__strip_both__end
+}
+/* }}} */
+/* }}} */
+
+/* #### Liquid `tablerow` block within `for` loops {{{ */
+liquid__block__iteration__tablerow__within_iteration = {
+    liquid__block__iteration__tablerow__within_iteration__plain
+  | liquid__block__iteration__tablerow__within_iteration__strip_leading
+  | liquid__block__iteration__tablerow__within_iteration__strip_trailing
+  | liquid__block__iteration__tablerow__within_iteration__strip_both
+}
+
+/* ##### Non-stripped variant of `tablerow` within `for` loops {{{ */
+/// Match `{% tablerow product in collection.products %}\n  Product title: {{ product.title }}`
+/// from input similar to;
+///
+/// ```liquid
+/// {% tablerow product in collection.products %}
+///   Product title: {{ product.title }}
+/// {% endtablerow %}
+/// ```
+liquid__block_subsection__iteration__tablerow__within_iteration__plain__start = ${
+    liquid__tag__iteration__tablerow__base__plain__start
+  ~ block__within_iteration*
+}
+
+/// Match input similar to;
+///
+/// ```liquid
+/// {% tablerow product in collection.products %}
+///   Product title: {{ product.title }}
+/// {% endtablerow %}
+/// ```
+liquid__block__iteration__tablerow__within_iteration__plain = ${
+    liquid__block_subsection__iteration__tablerow__within_iteration__plain__start
+  ~ liquid__tag__plain__end
+}
+/* }}} */
+
+/* ##### Strip leading spaces variant of `tablerow` within `for` loops {{{ */
+/// Match `{%- tablerow product in collection.products %}\n  Product title: {{ product.title }}`
+/// from input similar to;
+///
+/// ```liquid
+/// {%- tablerow product in collection.products %}
+///   Product title: {{ product.title }}
+/// {%- endtablerow %}
+/// ```
+liquid__block_subsection__iteration__tablerow__within_iteration__strip_leading__start = ${
+    liquid__tag__iteration__tablerow__base__strip_leading__start
+  ~ block__within_iteration*
+}
+
+/// Match input similar to;
+///
+/// ```liquid
+/// {%- tablerow product in collection.products %}
+///   Product title: {{ product.title }}
+/// {%- endtablerow %}
+/// ```
+liquid__block__iteration__tablerow__within_iteration__strip_leading = ${
+    liquid__block_subsection__iteration__tablerow__within_iteration__strip_leading__start
+  ~ liquid__tag__plain__end
+}
+/* }}} */
+
+/* ##### Strip trailing spaces variant of `tablerow` within `for` loops {{{ */
+/// Match `{% tablerow product in collection.products -%}\n  Product title: {{ product.title }}`
+/// from input similar to;
+///
+/// ```liquid
+/// {% tablerow product in collection.products -%}
+///   Product title: {{ product.title }}
+/// {% endtablerow -%}
+/// ```
+liquid__block_subsection__iteration__tablerow__within_iteration__strip_trailing__start = ${
+    liquid__tag__iteration__tablerow__base__strip_trailing__start
+  ~ block__within_iteration*
+}
+
+/// Match input similar to;
+///
+/// ```liquid
+/// {% tablerow product in collection.products -%}
+///   Product title: {{ product.title }}
+/// {% endtablerow -%}
+/// ```
+liquid__block__iteration__tablerow__within_iteration__strip_trailing = ${
+    liquid__block_subsection__iteration__tablerow__within_iteration__strip_trailing__start
+  ~ liquid__tag__strip_trailing__end
+}
+/* }}} */
+
+/* ##### Strip both leading and trailing spaces variant of `tablerow` within `for` loops {{{ */
+/// Match `{%- tablerow product in collection.products -%}\n  Product title: {{ product.title }}`
+/// from input similar to;
+///
+/// ```liquid
+/// {%- tablerow product in collection.products -%}
+///   Product title: {{ product.title }}
+/// {%- endtablerow -%}
+/// ```
+liquid__block_subsection__iteration__tablerow__within_iteration__strip_both__start = ${
+    liquid__tag__iteration__tablerow__base__strip_both__start
+  ~ block__within_iteration*
+}
+
+/// Match input similar to;
+///
+/// ```liquid
+/// {%- tablerow product in collection.products -%}
+///   Product title: {{ product.title }}
+/// {%- endtablerow -%}
+/// ```
+liquid__block__iteration__tablerow__within_iteration__strip_both = ${
+    liquid__block_subsection__iteration__tablerow__within_iteration__strip_both__start
+  ~ liquid__tag__strip_both__end
+}
+/* }}} */
+/* }}} */
+
+/* #### Liquid `tablerow` common to any `liquid` tag regardless of `for` loops {{{ */
+liquid__tagged__iteration__tablerow__start = _{
+    liquid__code__iteration__tablerow__start
+  ~ NEWLINE
+}
+/* }}} */
+
+/* #### Liquid `tablerow` within `liquid` tag and outside iteration {{{ */
+/// Match `tablerow product in collection.products\n    echo  product.title`
+/// from input similar to;
+///
+/// ```liquid
+/// {% liquid
+///   tablerow product in collection.products
+///     echo  product.title
+///   endtablerow
+/// %}
+/// ```
+liquid__tagged_subsection__iteration__tablerow__outside_iteration__start = ${
+    SPACE_OR_NEWLINE*
+  ~ liquid__tagged__iteration__tablerow__start
+  ~ liquid__tagged__outside_iteration*
+}
+
+/// Match input similar to;
+///
+/// ```liquid
+/// {% liquid
+///   tablerow product in collection.products
+///     echo  product.title
+///   endtablerow
+/// %}
+/// ```
+liquid__tagged__iteration__tablerow__outside_iteration = {
+    liquid__tagged_subsection__iteration__tablerow__outside_iteration__start
+  ~ (
+        SPACE_OR_NEWLINE*
+      ~ liquid__code__end
+    )
+}
+/* }}} */
+
+/* #### Liquid `tablerow` within `liquid` tag and within iteration {{{ */
+/// Match `tablerow product in collection.products\n      echo  product.title`
+/// from input similar to;
+///
+/// ```liquid
+/// {% liquid
+///   for collection in site.collections
+///     tablerow product in collection.products
+///       echo  product.title
+///     endtablerow
+///   endfor
+/// %}
+/// ```
+liquid__tagged_subsection__iteration__tablerow__within_iteration__start = ${
+    SPACE_OR_NEWLINE*
+  ~ liquid__tagged__iteration__tablerow__start
+  ~ liquid__tagged__within_iteration*
+}
+
+/// Match input similar to;
+///
+/// ```liquid
+/// {% liquid
+///   for collection in site.collections
+///     tablerow product in collection.products
+///       echo  product.title
+///     endtablerow
+///   endfor
+/// %}
+/// ```
+liquid__tagged__iteration__tablerow__within_iteration = {
+    liquid__tagged_subsection__iteration__tablerow__within_iteration__start
+  ~ (
+        SPACE_OR_NEWLINE*
+      ~ liquid__code__end
+    )
+}
+/* }}} */
+
+/* }}} */
+
+/* ### Iteration `cycle` {{{ */
+/* #### Liquid `cycle` common to block and `liquid` tag {{{ */
+liquid__key_word__iteration__cycle = { "cycle" }
+
+/// Note if `object` then it must result in `string` type
+liquid__code__iteration__for__cycle__group_name = { string | object }
+
+/// Note if `object` then it must result in `string` type
+liquid__code__iteration__for__cycle__parameters = {
+    (string | object)
+  ~ (
+        comma
+      ~ SPACE_OR_NEWLINE*
+      ~ (string | object)
+    )*
+}
+
+/// Match `cycle "first": "one", "two", "three"` or `"one", "two", "three"`
+/// from input similar to;
+///
+/// - `{% cycle "one", "two", "three" %}`
+/// - `{% cycle "first": "one", "two", "three" %}`
+liquid__code__iteration__for__cycle = _{
+    liquid__key_word__iteration__cycle
+  ~ (
+        SPACE_OR_NEWLINE+
+      ~ liquid__code__iteration__for__cycle__group_name
+      ~ ":"
+  )?
+  ~ SPACE_OR_NEWLINE*
+  ~ liquid__code__iteration__for__cycle__parameters
+}
+/* }}} */
+
+/* #### Liquid `cycle` common to all blocks {{{ */
+/// Match ` cycle "first": "one", "two", "three" ` or ` "one", "two", "three" `
+/// from input similar to;
+///
+/// - `{% cycle "one", "two", "three" %}`
+/// - `{% cycle "first": "one", "two", "three" %}`
+liquid__tag_content__iteration__for__cycle = _{
+    SPACE_OR_NEWLINE*
+  ~ liquid__code__iteration__for__cycle
+  ~ SPACE_OR_NEWLINE*
+}
+/* }}} */
+
+/* #### Liquid `cycle` block {{{ */
+liquid__block__iteration__for__cycle = {
+    liquid__block__iteration__for__cycle__plain
+  | liquid__block__iteration__for__cycle__strip_leading
+  | liquid__block__iteration__for__cycle__strip_trailing
+  | liquid__block__iteration__for__cycle__strip_both
+}
+
+/* ##### Non-stripped variant of `cycle` block {{{ */
+/// Match input similar to;
+///
+/// - `{% cycle "one", "two", "three" %}`
+/// - `{% cycle "first": "one", "two", "three" %}`
+liquid__block__iteration__for__cycle__plain = {
+    liquid__tag__open__plain
+  ~ liquid__tag_content__iteration__for__cycle
+  ~ liquid__tag__close__plain
+}
+/* }}} */
+
+/* ##### Strip leading spaces variant of `cycle` block {{{ */
+/// Match input similar to;
+///
+/// - `{%- cycle "one", "two", "three" %}`
+/// - `{%- cycle "first": "one", "two", "three" %}`
+liquid__block__iteration__for__cycle__strip_leading = {
+    liquid__tag__open__strip
+  ~ liquid__tag_content__iteration__for__cycle
+  ~ liquid__tag__close__plain
+}
+/* }}} */
+
+/* ##### Strip trailing spaces variant of `cycle` block {{{ */
+/// Match input similar to;
+///
+/// - `{% cycle "one", "two", "three" -%}`
+/// - `{% cycle "first": "one", "two", "three" -%}`
+liquid__block__iteration__for__cycle__strip_trailing = {
+    liquid__tag__open__plain
+  ~ liquid__tag_content__iteration__for__cycle
+  ~ liquid__tag__close__strip
+}
+/* }}} */
+
+/* ##### Strip both leading and trailing variant of `cycle` block {{{ */
+/// Match input similar to;
+///
+/// - `{%- cycle "one", "two", "three" -%}`
+/// - `{%- cycle "first": "one", "two", "three" -%}`
+liquid__block__iteration__for__cycle__strip_both = {
+    liquid__tag__open__strip
+  ~ liquid__tag_content__iteration__for__cycle
+  ~ liquid__tag__close__strip
+}
+/* }}} */
+/* }}} */
+
+/* #### Liquid `cycle` within `liquid` tag {{{ */
+/// Match `cycle "foo", "bar", "ham"` from input similar to;
+///
+/// ```liquid
+/// {% liquid
+///   for item in list
+///     cycle "foo", "bar", "ham"
+///   endfor
+/// %}
+/// ```
+liquid__tagged__iteration__for__cycle = {
+    SPACE_OR_NEWLINE*
+  ~ liquid__code__iteration__for__cycle
+  ~ NEWLINE
+}
+/* }}} */
+/* }}} */
+/* }}} */
+
+/* ## Liquid template -> https://shopify.github.io/liquid/tags/template/ {{{ */
+/* ### Liquid reserved words and syntax shared between `comment` and `raw` blocks {{{ */
+liquid__key_word__comment = { "comment" }
+liquid__key_word__raw = { "raw" }
+
+/// Match input similar to;
+///
+/// - `{% endcomment %}`
+/// - `{% endraw %}`
+liquid__not_executable__end = _{
+    (liquid__tag__open__strip | liquid__tag__open__plain)
+  ~ SPACE_OR_NEWLINE*
+  ~ liquid__code__end
+  ~ SPACE_OR_NEWLINE*
+  ~ (liquid__tag__close__strip | liquid__tag__close__plain)
+}
+/* }}} */
+
+/* ### Liquid block `comment` {{{ */
+/// Match input similar to
+///
+/// ```liquid
+/// {% comment %}
+///   Something that will not be rendered or executed
+/// {% endcomment %}
+/// ```
+liquid__block__comment = {
+    liquid__block_subsection__comment__start
+  ~ liquid__block_subsection__comment__content
+  ~ liquid__not_executable__end
+}
+
+/// Match input `{% comment %}`
+///
+/// ```liquid
+/// {% comment %}
+///   Something that will not be rendered or executed
+/// {% endcomment %}
+/// ```
+liquid__block_subsection__comment__start = ${
+    (liquid__tag__open__strip | liquid__tag__open__plain)
+  ~ SPACE_OR_NEWLINE*
+  ~ PUSH(liquid__key_word__comment)
+  ~ SPACE_OR_NEWLINE*
+  ~ (liquid__tag__close__strip | liquid__tag__close__plain)
+}
+
+liquid__block_subsection__comment__content = { (!liquid__not_executable__end ~ ANY)* }
+/* }}} */
+
+/* TODO: investigate if `raw` may be defined within `liquid` tag */
+/* ### Liquid block `raw` {{{ */
+/// Match input similar to
+///
+/// ```liquid
+/// {% raw %}
+///   Something that will not be rendered or executed
+/// {% endraw %}
+/// ```
+liquid__block__raw = {
+    liquid__block_subsection__raw__start
+  ~ liquid__block_subsection__raw__content
+  ~ liquid__not_executable__end
+}
+
+/// Match input `{% raw %}`
+liquid__block_subsection__raw__start = ${
+    (liquid__tag__open__strip | liquid__tag__open__plain)
+  ~ SPACE_OR_NEWLINE*
+  ~ PUSH(liquid__key_word__raw)
+  ~ SPACE_OR_NEWLINE*
+  ~ (liquid__tag__close__strip | liquid__tag__close__plain)
+}
+
+liquid__block_subsection__raw__content = { (!liquid__not_executable__end ~ ANY)* }
+/* }}} */
+
+/* ### Liquid tag `liquid` -> https://shopify.github.io/liquid/tags/template/#liquid {{{ */
+liquid__key_word__liquid = { "liquid" }
+/// #### Match input similar to
+///
+/// ```liquid
+/// {% liquid
+///   case section.blocks.size
+///     when 1
+///       assign column_size = ''
+///     when 2
+///       assign column_size = 'one-half'
+///     when 3
+///       assign column_size = 'one-third'
+///     else
+///       assign column_size = 'one-quarter'
+///   endcase
+///   echo 'Column size: ' | append: column_size
+/// %}
+/// ```
+liquid__tag__liquid__outside_iteration = ${
+    (liquid__tag__open__strip | liquid__tag__open__plain)
+  ~ SPACE_OR_NEWLINE*
+  ~ liquid__key_word__liquid
+  ~ SPACE_OR_NEWLINE+
+  ~ liquid__tagged__outside_iteration*
+  ~ SPACE_OR_NEWLINE*
+  ~ (liquid__tag__close__strip | liquid__tag__close__plain)
+}
+
+/// #### Match input similar to
+///
+/// ```liquid
+/// {% for selection in page.selections %}
+///   {% liquid
+///     case section.blocks.size
+///       when 1
+///         assign column_size = ''
+///       when 2
+///         assign column_size = 'one-half'
+///       when 3
+///         assign column_size = 'one-third'
+///       else
+///         assign column_size = 'one-quarter'
+///     endcase
+///     echo 'Column size: ' | append: column_size
+///   %}
+/// {% endfor %}
+/// ```
+liquid__tag__liquid__within_iteration = ${
+    (liquid__tag__open__strip | liquid__tag__open__plain)
+  ~ SPACE_OR_NEWLINE*
+  ~ liquid__key_word__liquid
+  ~ SPACE_OR_NEWLINE+
+  ~ liquid__tagged__within_iteration*
+  ~ SPACE_OR_NEWLINE*
+  ~ (liquid__tag__close__strip | liquid__tag__close__plain)
+}
+
+liquid__echo__parameter = ${ string | object }
+
+/* TODO: add filters after parameters to `echo` */
+/// Match `echo 'Hello ' | append: "world!"` within input similar to
+///
+/// ```liquid
+/// {% liquid
+///   echo 'Hello ' | append: "world!"
+/// %}
+/// ```
+liquid__echo = ${
+    WHITE_SPACE*
+  ~ "echo"
+  ~ SPACE_OR_NEWLINE+
+  ~ liquid__echo__parameter
+  ~ (
+        WHITE_SPACE+
+      ~ liquid__filter__list
+    )?
+  ~ NEWLINE
+}
+/* }}} */
+
+/* ### Liquid `render` -> https://shopify.github.io/liquid/tags/template/#render {{{ */
+/* TODO: investigate possible combinations of parameter types */
+liquid__key_word__render = { "render" }
+/// Match `render "name", my_variable: my_variable, my_other_variable: "oranges"` within input similar to
+///
+/// ```liquid
+/// {% liquid
+///   render "name", my_variable: my_variable, my_other_variable: "oranges"
+/// %}
+/// ```
+liquid__tagged__render = {
+    WHITE_SPACE*
+  ~ liquid__code__render
+  ~ NEWLINE
+}
+
+/// Match input similar to;
+///
+/// - `{% render "name", my_variable: my_variable, my_other_variable: "oranges" %}`
+/// - `{% render "product", product: featured_product %}`
+/// - `{% render "product" with featured_product as product %}`
+/// - `{% render "product_variant" for variants as variant %}`
+liquid__tag__render = ${
+    (liquid__tag__open__strip | liquid__tag__open__plain)
+  ~ SPACE_OR_NEWLINE*
+  ~ liquid__code__render
+  ~ SPACE_OR_NEWLINE*
+  ~ (liquid__tag__close__strip | liquid__tag__close__plain)
+}
+
+/// Match `render "name", my_variable: my_variable, my_other_variable: "oranges"` from input similar to
+///
+/// - `{% render "name", my_variable: my_variable, my_other_variable: "oranges" %}`
+liquid__code__render = _{
+    liquid__key_word__render
+  ~ SPACE_OR_NEWLINE+
+  ~ liquid__code__render__template_name
+  ~ (
+        liquid__code__render__parameter__variable
+      | liquid__code__render__parameter__with
+      | liquid__code__render__parameter__for
+    )?
+}
+
+/// File path relative to site root to template
+liquid__code__render__template_name = ${ string }
+
+/// Match inputs similar to;
+///
+/// - `fruit: page.fruit, fall_back: "oranges"`
+liquid__code__render__parameter__variable = ${
+    SPACE_OR_NEWLINE+
+  ~ liquid__code__render__parameter__variable__pair
+  ~ (
+        comma
+      ~ SPACE_OR_NEWLINE*
+      ~ liquid__code__render__parameter__variable__pair
+  )*
+}
+
+/// Match inputs similar to;
+///
+/// - `fruit: page.fruit`
+/// - `fall_back: "oranges"`
+liquid__code__render__parameter__variable__pair = ${
+  liquid__code__render__parameter__variable__key
+  ~ colon
+  ~ SPACE_OR_NEWLINE*
+  ~ liquid__code__render__parameter__variable__value
+}
+
+liquid__code__render__parameter__variable__key = { object__word }
+liquid__code__render__parameter__variable__value = { string | object }
+
+/// A single object can be passed to a template via `with` and optional `as`
+liquid__code__render__parameter__with = ${
+    "with"
+  ~ SPACE_OR_NEWLINE+
+  ~ liquid__code__render__parameter__with__value
+  ~ (
+        SPACE_OR_NEWLINE+
+      ~ "as"
+      ~ SPACE_OR_NEWLINE+
+      ~ liquid__code__render__parameter__with__name
+    )?
+}
+
+/// Variable name within template to assign
+liquid__code__render__parameter__with__name = { object__word }
+
+/// Variable value within template to assign
+liquid__code__render__parameter__with__value = { object }
+
+/// A template can be rendered once for each value of an enumerable object
+liquid__code__render__parameter__for = ${
+    "for"
+  ~ SPACE_OR_NEWLINE+
+  ~ liquid__code__render__parameter__for__enumerable
+  ~ (
+        SPACE_OR_NEWLINE+
+      ~ "as"
+      ~ SPACE_OR_NEWLINE+
+      ~ liquid__code__render__parameter__for__name
+    )?
+}
+
+/// Variable name within template to assign
+liquid__code__render__parameter__for__name = { object__word }
+
+/// Object to iterate over
+liquid__code__render__parameter__for__enumerable = { object }
+/* }}} */
+
+/* WARNING: Liquid core wants to deprecate this tag, however, many flavors still use it */
+/* ### Liquid `include` -> https://shopify.github.io/liquid/tags/template/#include {{{ */
+liquid__key_word__include = { "include" }
+
+liquid__tagged__include = {
+    WHITE_SPACE*
+  ~ liquid__code__include
+  ~ NEWLINE
+}
+
+/// Match input similar to;
+///
+/// - `{% include "template-name" %}`
+/// - `{% include "template-name" one=value %}`
+/// - `{% include "template-name" one=value two="second" %}`
+liquid__tag__include = ${
+    (liquid__tag__open__strip | liquid__tag__open__plain)
+  ~ SPACE_OR_NEWLINE*
+  ~ liquid__code__include
+  ~ SPACE_OR_NEWLINE*
+  ~ (liquid__tag__close__strip | liquid__tag__close__plain)
+}
+
+/// Match `include "template-name" one=value two="second"` from input similar to;
+///
+/// - `{% include "template-name" %}`
+/// - `{% include "template-name" one=value %}`
+/// - `{% include "template-name" one=value two="second" %}`
+liquid__code__include = ${
+    liquid__key_word__include
+  ~ SPACE_OR_NEWLINE+
+  ~ liquid__code__include__name
+  ~ (SPACE_OR_NEWLINE+ ~ liquid__code__include__parameter)*
+}
+
+/// File path relative to site root to template
+liquid__code__include__name = ${ string }
+
+liquid__code__include__parameter = ${
+    liquid__code__include__parameter__key
+  ~ "="
+  ~ liquid__code__include__parameter__value
+}
+
+liquid__code__include__parameter__key = ${ object__word }
+liquid__code__include__parameter__value = ${ string | object }
+/* }}} */
+/* }}} */
+
+/* ## Liquid variable definitions such as `assign`, `capture`, etc -> https://shopify.github.io/liquid/tags/variable/ {{{ */
+/* ### Liquid tag `assign` -> https://shopify.github.io/liquid/tags/variable/#assign {{{ */
+liquid__key_word__assign = { "assign" }
+
+liquid__tagged__assign = {
+    WHITE_SPACE*
+  ~ liquid__code__assign
+  ~ NEWLINE
+}
+
+liquid__tag__assign = ${
+    (liquid__tag__open__strip | liquid__tag__open__plain)
+  ~ SPACE_OR_NEWLINE*
+  ~ liquid__code__assign
+  ~ SPACE_OR_NEWLINE*
+  ~ (liquid__tag__close__strip | liquid__tag__close__plain)
+}
+
+liquid__code__assign = ${
+    liquid__key_word__assign
+  ~ SPACE_OR_NEWLINE+
+  ~ liquid__code__assign__key
+  ~ SPACE_OR_NEWLINE*
+  ~ "="
+  ~ SPACE_OR_NEWLINE*
+  ~ liquid__code__assign__value
+  ~ (
+        SPACE_OR_NEWLINE+
+      ~ liquid__filter__list
+    )?
+}
+
+liquid__code__assign__key = ${ object__word }
+liquid__code__assign__value = ${ liquid__type }
+/* }}} */
+
+/* ### Liquid block `capture` -> https://shopify.github.io/liquid/tags/variable/#capture {{{ */
+/* #### Liquid reserved words and syntax for `capture` blocks {{{ */
+liquid__key_word__capture = { "capture" }
+liquid__code__capture__variable_name = { object__word }
+/* }}} */
+
+/* #### Liquid `capture` common to all blocks regardless of `for` loops {{{ */
+/// Mutates stack by pushing `liquid__key_word__capture` onto stack
+///
+/// Match `capture variable_name` from input similar to;
+///
+/// - `{% capture variable_name %}`
+liquid__code__capture = _{
+      PUSH(liquid__key_word__capture)
+    ~ SPACE_OR_NEWLINE+
+    ~ liquid__code__capture__variable_name
+}
+
+/// Match ` capture variable_name ` from input similar to;
+///
+/// - `{% capture variable_name %}`
+liquid__tag_content__capture__start = _{
+      SPACE_OR_NEWLINE*
+    ~ liquid__code__capture
+    ~ SPACE_OR_NEWLINE*
+}
+/* }}} */
+
+/* #### Non-stripped variant of `capture` tag outside of `for` loops {{{ */
+/// Match input similar to;
+///
+/// - `{% capture variable_name %}`
+liquid__tag__capture__base__plain__start = _{
+    liquid__tag__open__plain
+  ~ liquid__tag_content__capture__start
+  ~ liquid__tag__close__plain
+}
+/* }}} */
+
+/* #### Strip leading spaces variant of `capture` tag outside of `for` loops {{{ */
+/// Match input similar to;
+///
+/// - `{%- capture variable_name %}`
+liquid__tag__capture__base__strip_leading__start = _{
+    liquid__tag__open__strip
+  ~ liquid__tag_content__capture__start
+  ~ liquid__tag__close__plain
+}
+/* }}} */
+
+/* #### Strip trailing spaces variant of `capture` tag outside of `for` loops {{{ */
+/// Match input similar to;
+///
+/// - `{% capture variable_name -%}`
+liquid__tag__capture__base__strip_trailing__start = _{
+    liquid__tag__open__plain
+  ~ liquid__tag_content__capture__start
+  ~ liquid__tag__close__strip
+}
+/* }}} */
+
+/* #### Strip leading and trailing spaces variant of `capture` tag outside of `for` loops {{{ */
+/// Match input similar to;
+///
+/// - `{%- capture variable_name -%}`
+liquid__tag__capture__base__strip_both__start = _{
+    liquid__tag__open__strip
+  ~ liquid__tag_content__capture__start
+  ~ liquid__tag__close__strip
+}
+/* }}} */
+
+/* #### Liquid block `capture` outside of `for` loops {{{ */
+liquid__block__capture__outside_iteration = ${
+    liquid__block__capture__outside_iteration__plain
+  | liquid__block__capture__outside_iteration__strip_leading
+  | liquid__block__capture__outside_iteration__strip_trailing
+  | liquid__block__capture__outside_iteration__strip_both
+}
+
+/* ##### Non-stripped variant of `capture` block outside of `for` loops {{{ */
+/// Match input similar to
+///
+/// ```liquid
+/// {% capture variable_name %}
+///   Oh noes, I be captured!
+/// {% endcapture %}
+/// ```
+liquid__block__capture__outside_iteration__plain = {
+    liquid__block_subsection__capture__outside_iteration__plain__start
+  ~ liquid__tag__plain__end
+}
+
+/// Match input similar to;
+///
+/// - `{% capture variable_name %} ... content or more code...`
+liquid__block_subsection__capture__outside_iteration__plain__start = _{
+    liquid__tag__capture__base__plain__start
+  ~ block__outside_iteration*
+}
+/* }}} */
+
+/* ##### Strip leading spaces variant of `capture` block outside of `for` loops {{{ */
+/// Match input similar to
+///
+/// ```liquid
+/// {%- capture variable_name %}
+///   Oh noes, I be captured!
+/// {%- endcapture %}
+/// ```
+liquid__block__capture__outside_iteration__strip_leading = {
+    liquid__block_subsection__capture__outside_iteration__strip_leading__start
+  ~ liquid__tag__strip_leading__end
+}
+
+/// Match input similar to;
+///
+/// - `{% capture variable_name %} ... content or more code...`
+liquid__block_subsection__capture__outside_iteration__strip_leading__start = _{
+    liquid__tag__capture__base__strip_leading__start
+  ~ block__outside_iteration*
+}
+/* }}} */
+
+/* ##### Strip trailing spaces variant of `capture` block outside of `for` loops {{{ */
+/// Match input similar to
+///
+/// ```liquid
+/// {% capture variable_name -%}
+///   Oh noes, I be captured!
+/// {% endcapture -%}
+/// ```
+liquid__block__capture__outside_iteration__strip_trailing = {
+    liquid__block_subsection__capture__outside_iteration__strip_trailing__start
+  ~ liquid__tag__strip_trailing__end
+}
+
+/// Match input similar to;
+///
+/// - `{% capture variable_name %} ... content or more code...`
+liquid__block_subsection__capture__outside_iteration__strip_trailing__start = _{
+    liquid__tag__capture__base__strip_trailing__start
+  ~ block__outside_iteration*
+}
+/* }}} */
+
+/* ##### Strip both leading and trailing spaces variant of `capture` block outside of `for` loops {{{ */
+/// Match input similar to
+///
+/// ```liquid
+/// {%- capture variable_name %}
+///   Oh noes, I be captured!
+/// {%- endcapture %}
+/// ```
+liquid__block__capture__outside_iteration__strip_both = {
+    liquid__block_subsection__capture__outside_iteration__strip_both__start
+  ~ liquid__tag__strip_both__end
+}
+
+/// Match input similar to;
+///
+/// - `{% capture variable_name %} ... content or more code...`
+liquid__block_subsection__capture__outside_iteration__strip_both__start = _{
+    liquid__tag__capture__base__strip_both__start
+  ~ block__outside_iteration*
+}
+/* }}} */
+
+/* }}} */
+
+/* #### Liquid block `capture` within of `for` loops {{{ */
+liquid__block__capture__within_iteration = ${
+    liquid__block__capture__within_iteration__plain
+  | liquid__block__capture__within_iteration__strip_leading
+  | liquid__block__capture__within_iteration__strip_trailing
+  | liquid__block__capture__within_iteration__strip_both
+}
+
+/* ##### Non-stripped variant of `capture` block within of `for` loops {{{ */
+/// Match input similar to
+///
+/// ```liquid
+/// {% capture variable_name %}
+///   Oh noes, I be captured!
+/// {% endcapture %}
+/// ```
+liquid__block__capture__within_iteration__plain = {
+    liquid__block_subsection__capture__within_iteration__plain__start
+  ~ liquid__tag__plain__end
+}
+
+/// Match input similar to;
+///
+/// - `{% capture variable_name %} ... content or more code...`
+liquid__block_subsection__capture__within_iteration__plain__start = _{
+    liquid__tag__capture__base__plain__start
+  ~ block__within_iteration*
+}
+/* }}} */
+
+/* ##### Strip leading spaces variant of `capture` block within of `for` loops {{{ */
+/// Match input similar to
+///
+/// ```liquid
+/// {%- capture variable_name %}
+///   Oh noes, I be captured!
+/// {%- endcapture %}
+/// ```
+liquid__block__capture__within_iteration__strip_leading = {
+    liquid__block_subsection__capture__within_iteration__strip_leading__start
+  ~ liquid__tag__strip_leading__end
+}
+
+/// Match input similar to;
+///
+/// - `{% capture variable_name %} ... content or more code...`
+liquid__block_subsection__capture__within_iteration__strip_leading__start = _{
+    liquid__tag__capture__base__strip_leading__start
+  ~ block__within_iteration*
+}
+/* }}} */
+
+/* ##### Strip trailing spaces variant of `capture` block within of `for` loops {{{ */
+/// Match input similar to
+///
+/// ```liquid
+/// {% capture variable_name -%}
+///   Oh noes, I be captured!
+/// {% endcapture -%}
+/// ```
+liquid__block__capture__within_iteration__strip_trailing = {
+    liquid__block_subsection__capture__within_iteration__strip_trailing__start
+  ~ liquid__tag__strip_trailing__end
+}
+
+/// Match input similar to;
+///
+/// - `{% capture variable_name %} ... content or more code...`
+liquid__block_subsection__capture__within_iteration__strip_trailing__start = _{
+    liquid__tag__capture__base__strip_trailing__start
+  ~ block__within_iteration*
+}
+/* }}} */
+
+/* ##### Strip both leading and trailing spaces variant of `capture` block within of `for` loops {{{ */
+/// Match input similar to
+///
+/// ```liquid
+/// {%- capture variable_name %}
+///   Oh noes, I be captured!
+/// {%- endcapture %}
+/// ```
+liquid__block__capture__within_iteration__strip_both = {
+    liquid__block_subsection__capture__within_iteration__strip_both__start
+  ~ liquid__tag__strip_both__end
+}
+
+/// Match input similar to;
+///
+/// - `{% capture variable_name %} ... content or more code...`
+liquid__block_subsection__capture__within_iteration__strip_both__start = _{
+    liquid__tag__capture__base__strip_both__start
+  ~ block__within_iteration*
+}
+/* }}} */
+
+/* }}} */
+/* }}} */
+
+/* ### Liquid tag `increment` -> https://shopify.github.io/liquid/tags/variable/#increment {{{ */
+liquid__key_word__increment = { "increment" }
+liquid__code__increment__target = ${ object__word }
+
+/// Match ` increment variable_name ` from inputs similar to;
+///
+/// - `{% increment variable_name %}`
+liquid__code__increment = ${
+    liquid__key_word__increment
+  ~ SPACE_OR_NEWLINE+
+  ~ liquid__code__increment__target
+}
+
+/// Match `increment variable_name\n` from inputs similar to;
+///
+/// ```liquid
+/// {% liquid
+///   increment variable_name
+/// %}
+/// ```
+liquid__tagged__increment = ${
+    WHITE_SPACE*
+  ~ liquid__code__increment
+  ~ NEWLINE
+}
+
+/// Match inputs similar to;
+///
+/// - `{% increment variable_name %}`
+liquid__tag__increment = ${
+    (liquid__tag__open__strip | liquid__tag__open__plain)
+  ~ SPACE_OR_NEWLINE*
+  ~ liquid__code__increment
+  ~ SPACE_OR_NEWLINE*
+  ~ (liquid__tag__close__strip | liquid__tag__close__plain)
+}
+/* }}} */
+
+/* ### Liquid tag `decrement` -> https://shopify.github.io/liquid/tags/variable/#decrement {{{ */
+liquid__key_word__decrement = { "decrement" }
+liquid__code__decrement__target = ${ object__word }
+
+/// Match ` decrement variable_name ` from inputs similar to;
+///
+/// - `{% decrement variable_name %}`
+liquid__code__decrement = ${
+    liquid__key_word__decrement
+  ~ SPACE_OR_NEWLINE+
+  ~ liquid__code__decrement__target
+}
+
+/// Match `decrement variable_name\n` from inputs similar to;
+///
+/// ```liquid
+/// {% liquid
+///   decrement variable_name
+/// %}
+/// ```
+liquid__tagged__decrement = ${
+    WHITE_SPACE*
+  ~ liquid__code__decrement
+  ~ NEWLINE
+}
+
+/// Match inputs similar to;
+///
+/// - `{% decrement variable_name %}`
+/// - `{%- decrement variable_name -%}`
+liquid__tag__decrement = ${
+    (liquid__tag__open__strip | liquid__tag__open__plain)
+  ~ SPACE_OR_NEWLINE*
+  ~ liquid__code__decrement
+  ~ SPACE_OR_NEWLINE*
+  ~ (liquid__tag__close__strip | liquid__tag__close__plain)
+}
+/* }}} */
+/* }}} */
+
+/* ## Liquid filters {{{ */
+liquid__filter__separator = _{ "|" }
+
+/// Match `| append: "foo" | append: "bar"` from inputs similar to
+///
+/// ```liquid
+/// {{ object.prop | append: "foo" | append: "bar" }}
+/// ```
+///
+/// TODO: maybe adjust `liquid__filter__list` to be more strict about matching
+/// known filters such that unknown filters of similar name are not matched.
+liquid__filter__list = ${
+    liquid__filter__separator
+  ~ SPACE_OR_NEWLINE*
+  ~ liquid__filter
+  ~ (
+        SPACE_OR_NEWLINE*
+      ~ liquid__filter__separator
+      ~ SPACE_OR_NEWLINE*
+      ~ liquid__filter
+    )*
+}
+
+liquid__filter = _{
+    liquid__filter__abs
+  | liquid__filter__append
+  | liquid__filter__at_least
+  | liquid__filter__at_most
+  | liquid__filter__capitalize
+  | liquid__filter__ceil
+  | liquid__filter__compact
+  | liquid__filter__concat
+  | liquid__filter__date
+  | liquid__filter__default
+  | liquid__filter__divided_by
+  | liquid__filter__downcase
+  | liquid__filter__escape_once
+  | liquid__filter__escape
+  | liquid__filter__first
+  | liquid__filter__floor
+  | liquid__filter__join
+  | liquid__filter__last
+  | liquid__filter__lstrip
+  | liquid__filter__map
+  | liquid__filter__minus
+  | liquid__filter__modulo
+  | liquid__filter__newline_to_br
+  | liquid__filter__plus
+  | liquid__filter__prepend
+  | liquid__filter__remove_first
+  | liquid__filter__remove
+  | liquid__filter__replace_first
+  | liquid__filter__replace
+  | liquid__filter__reverse
+  | liquid__filter__round
+  | liquid__filter__rstrip
+  | liquid__filter__size
+  | liquid__filter__slice
+  | liquid__filter__sort_natural
+  | liquid__filter__sort
+  | liquid__filter__split
+  | liquid__filter__strip_html
+  | liquid__filter__strip_newlines
+  | liquid__filter__strip
+  | liquid__filter__sum
+  | liquid__filter__times
+  | liquid__filter__truncatewords
+  | liquid__filter__truncate
+  | liquid__filter__uniq
+  | liquid__filter__upcase
+  | liquid__filter__url_decode
+  | liquid__filter__url_encode
+  | liquid__filter__where
+  /* | */
+  | liquid__filter__unrecognized
+}
+
+/// Collect all known filter keywords to make matching unknown filters easier
+liquid__key_word__filter = _{
+    liquid__key_word__filter__abs
+  | liquid__key_word__filter__append
+  | liquid__key_word__filter__at_least
+  | liquid__key_word__filter__at_most
+  | liquid__key_word__filter__capitalize
+  | liquid__key_word__filter__ceil
+  | liquid__key_word__filter__compact
+  | liquid__key_word__filter__concat
+  | liquid__key_word__filter__date
+  | liquid__key_word__filter__default
+  | liquid__key_word__filter__divided_by
+  | liquid__key_word__filter__downcase
+  | liquid__key_word__filter__escape_once
+  | liquid__key_word__filter__escape
+  | liquid__key_word__filter__first
+  | liquid__key_word__filter__floor
+  | liquid__key_word__filter__join
+  | liquid__key_word__filter__last
+  | liquid__key_word__filter__lstrip
+  | liquid__key_word__filter__map
+  | liquid__key_word__filter__minus
+  | liquid__key_word__filter__modulo
+  | liquid__key_word__filter__newline_to_br
+  | liquid__key_word__filter__plus
+  | liquid__key_word__filter__prepend
+  | liquid__key_word__filter__remove_first
+  | liquid__key_word__filter__remove
+  | liquid__key_word__filter__replace_first
+  | liquid__key_word__filter__replace
+  | liquid__key_word__filter__reverse
+  | liquid__key_word__filter__round
+  | liquid__key_word__filter__rstrip
+  | liquid__key_word__filter__size
+  | liquid__key_word__filter__slice
+  | liquid__key_word__filter__sort_natural
+  | liquid__key_word__filter__sort
+  | liquid__key_word__filter__split
+  | liquid__key_word__filter__strip_html
+  | liquid__key_word__filter__strip_newlines
+  | liquid__key_word__filter__strip
+  | liquid__key_word__filter__sum
+  | liquid__key_word__filter__times
+  | liquid__key_word__filter__truncatewords
+  | liquid__key_word__filter__truncate
+  | liquid__key_word__filter__uniq
+  | liquid__key_word__filter__upcase
+  | liquid__key_word__filter__url_decode
+  | liquid__key_word__filter__url_encode
+  | liquid__key_word__filter__where
+}
+
+/* ### Liquid filter `abs` -> https://shopify.github.io/liquid/filters/abs/ {{{ */
+liquid__key_word__filter__abs = ${ "abs" ~ !object__word }
+/// Returns the absolute value of a number, or number-like string
+///
+/// Example inputs
+///
+/// ```liquid
+/// {{ -17 | abs }}
+/// {{ 4 | abs }}
+/// {{ "-19.86" | abs }}
+/// ```
+///
+/// Expected outputs
+///
+/// ```liquid
+/// 17
+/// 4
+/// 19.86
+/// ```
+liquid__filter__abs = ${ liquid__key_word__filter__abs }
+/* }}} */
+
+/* ### Liquid filter `append` -> https://shopify.github.io/liquid/filters/append/ {{{ */
+liquid__key_word__filter__append = ${ "append" ~ !object__word }
+liquid__filter__append__value = ${ liquid__type }
+
+/// Adds specified string to end of piped string
+///
+/// Example inputs
+///
+/// ```liquid
+/// {% assign names = "Alice, Bob, Carol" %}
+/// {{ names | append: ", Jain" }}
+/// ```
+///
+/// Expected outputs
+///
+/// ```liquid
+/// Alice, Bob, Carol, Jain
+/// ```
+///
+/// Note; piped target and `liquid__filter__append__value` are converted to
+/// `string` if/when necessary prior to attempting to append and return a
+/// `string` type
+liquid__filter__append = ${
+    liquid__key_word__filter__append
+  ~ SPACE_OR_NEWLINE*
+  ~ colon
+  ~ SPACE_OR_NEWLINE+
+  ~ liquid__filter__append__value
+}
+/* }}} */
+
+/* ### Liquid filter `at_least` -> https://shopify.github.io/liquid/filters/at_least/ {{{ */
+liquid__key_word__filter__at_least = ${ "at_least" ~ !object__word }
+liquid__filter__at_least__value = ${ liquid__type }
+
+/// Limits a number to a minimum value
+///
+/// Example inputs
+///
+/// ```liquid
+/// {{ 4 | at_least: 5 }}
+/// {{ 4 | at_least: 3 }}
+/// ```
+///
+/// Expected outputs
+///
+/// ```liquid
+/// 5
+/// 4
+/// ```
+///
+/// Note; piped target and `liquid__filter__at_least__value` are converted to
+/// `number` if/when necessary prior to attempting to at_least and return a
+/// `number` type
+liquid__filter__at_least = ${
+    liquid__key_word__filter__at_least
+  ~ SPACE_OR_NEWLINE*
+  ~ colon
+  ~ SPACE_OR_NEWLINE+
+  ~ liquid__filter__at_least__value
+}
+/* }}} */
+
+/* ### Liquid filter `at_most` -> https://shopify.github.io/liquid/filters/at_most/ {{{ */
+liquid__key_word__filter__at_most = ${ "at_most" ~ !object__word }
+liquid__filter__at_most__value = ${ liquid__type }
+
+/// Limits a number to a maximum value
+///
+/// Example inputs
+///
+/// ```liquid
+/// {{ 4 | at_most: 5 }}
+/// {{ 4 | at_most: 3 }}
+/// ```
+///
+/// Expected outputs
+///
+/// ```liquid
+/// 4
+/// 3
+/// ```
+///
+/// Note; piped target and `liquid__filter__at_most__value` are converted to
+/// `number` if/when necessary prior to attempting to at_most and return a
+/// `number` type
+liquid__filter__at_most = ${
+    liquid__key_word__filter__at_most
+  ~ SPACE_OR_NEWLINE*
+  ~ colon
+  ~ SPACE_OR_NEWLINE+
+  ~ liquid__filter__at_most__value
+}
+/* }}} */
+
+/* ### Liquid filter `capitalize` -> https://shopify.github.io/liquid/filters/capitalize/ {{{ */
+liquid__key_word__filter__capitalize = { "capitalize" ~ !object__word }
+
+/// Makes the first character of a string capitalized and converts any
+/// remaining characters to lower case
+///
+/// Example inputs
+///
+/// ```liquid
+/// {{ "title" | capitalize }}
+/// {{ "my GREAT title" | capitalize }}
+/// ```
+///
+/// Expected outputs
+///
+/// ```liquid
+/// Title
+/// My great title
+/// ```
+liquid__filter__capitalize = { liquid__key_word__filter__capitalize }
+/* }}} */
+
+/* ### Liquid filter `ceil` -> https://shopify.github.io/liquid/filters/ceil/ {{{ */
+liquid__key_word__filter__ceil = { "ceil" ~ !object__word }
+/// Round an input to the nearest whole number
+///
+/// Example inputs
+///
+/// ```liquid
+/// {{ 1.2 | ceil }}
+/// {{ 2.0 | ceil }}
+/// {{ 183.357 | ceil }}
+/// {{ "3.5" | ceil }}
+/// ```
+///
+/// Expected outputs
+///
+/// ```liquid
+/// 2
+/// 2
+/// 184
+/// 4
+/// ```
+///
+/// Note; piped target s converted to `number` if/when necessary prior to
+/// attempting to round and return a `number` type
+liquid__filter__ceil = ${ liquid__key_word__filter__ceil }
+/* }}} */
+
+/* ### Liquid filter `compact` -> https://shopify.github.io/liquid/filters/compact/ {{{ */
+liquid__key_word__filter__compact = ${ "compact" ~ !object__word }
+
+/// Return new array after removing `nil` values from a target array
+liquid__filter__compact = ${ liquid__key_word__filter__compact }
+/* }}} */
+
+/* ### Liquid filter `concat` -> https://shopify.github.io/liquid/filters/concat/ {{{ */
+liquid__key_word__filter__concat = ${ "concat" ~ !object__word }
+
+/// Type of object final target must be an array
+liquid__filter__concat__value = ${ object }
+
+/// Concatenates multiple arrays
+liquid__filter__concat = ${
+    liquid__key_word__filter__concat
+  ~ SPACE_OR_NEWLINE*
+  ~ colon
+  ~ SPACE_OR_NEWLINE+
+  ~ liquid__filter__concat__value
+}
+/* }}} */
+
+/* ### Liquid filter `date` -> https://shopify.github.io/liquid/filters/date/ {{{ */
+liquid__key_word__filter__date = ${ "date" ~ !object__word }
+
+/// Type of final target for `object` must be a string for formatting date/time
+/// stamp, ex. `"%Y-%m-%d"`
+liquid__filter__date__format = ${ object | string }
+
+/// Piped target may be `"today"` or `"now"` for current time of execution,
+/// otherwise any valid date/time format _should_ be accepted
+liquid__filter__date = ${
+    liquid__key_word__filter__date
+  ~ SPACE_OR_NEWLINE*
+  ~ colon
+  ~ SPACE_OR_NEWLINE+
+  ~ liquid__filter__date__format
+}
+/* }}} */
+
+/* ### Liquid filter `default` -> https://shopify.github.io/liquid/filters/default/ {{{ */
+liquid__key_word__filter__default = ${ "default" ~ !object__word }
+
+/// Value to assign/output if piped target is `nil`, `false`, or empty
+liquid__filter__default__value = ${ liquid__type }
+
+/// Match `allow_false: true` from  inputs similar to
+///
+/// ```liquid
+/// {{ object.falsey_prop | default: true, allow_false: true }}
+/// ```
+liquid__filter__default__parameter = ${
+    "allow_false"
+  ~ SPACE_OR_NEWLINE*
+  ~ colon
+  ~ SPACE_OR_NEWLINE*
+  ~ boolean
+}
+
+/// Match inputs similar to
+///
+/// ```liquid
+/// {{ object.falsey_prop | default: true, allow_false: true }}
+/// ```
+liquid__filter__default = ${
+    liquid__key_word__filter__default
+  ~ SPACE_OR_NEWLINE*
+  ~ colon
+  ~ SPACE_OR_NEWLINE+
+  ~ liquid__filter__default__value
+  ~ (
+        SPACE_OR_NEWLINE*
+      ~ comma
+      ~ SPACE_OR_NEWLINE*
+      ~ liquid__filter__default__parameter
+    )?
+}
+/* }}} */
+
+/* ### Liquid filter `divided_by` -> https://shopify.github.io/liquid/filters/divided_by/ {{{ */
+liquid__key_word__filter__divided_by = ${ "divided_by" ~ !object__word }
+liquid__filter__divided_by__value = ${ liquid__type }
+
+/// Divide piped target by `number` and output either an integer or float based
+/// on denominator type
+///
+/// Example inputs
+///
+/// ```liquid
+/// {{ 20 | divided_by: 5 }}
+/// {{ 20 | divided_by: 7 }}
+/// {{ 20 | divided_by: 7.0 }}
+///
+/// {% assign my_integer = 7 %}
+/// {% assign my_float = my_integer | times: 1.0 %}
+/// {{ 20 | divided_by: my_float }}
+/// ```
+///
+/// Expected outputs
+///
+/// ```liquid
+/// 4
+/// 2
+/// 2.857142857142857
+/// 2.857142857142857
+/// ```
+///
+/// Note; piped target and `liquid__filter__divided_by__value` are converted to
+/// `number` if/when necessary prior to attempting to divided_by and return a
+/// `number` type
+liquid__filter__divided_by = ${
+    liquid__key_word__filter__divided_by
+  ~ SPACE_OR_NEWLINE*
+  ~ colon
+  ~ SPACE_OR_NEWLINE+
+  ~ liquid__filter__divided_by__value
+}
+/* }}} */
+
+/* ### Liquid filter `downcase` -> https://shopify.github.io/liquid/filters/downcase/ {{{ */
+liquid__key_word__filter__downcase = { "downcase" ~ !object__word+ }
+
+/// Makes all characters of string lowercase
+liquid__filter__downcase = { liquid__key_word__filter__downcase }
+/* }}} */
+
+/* ### Liquid filter `escape_once` -> https://shopify.github.io/liquid/filters/escape_once/ {{{ */
+liquid__key_word__filter__escape_once = { "escape_once" ~ !object__word+ }
+
+/// Escapes string by replacing characters with escape_once sequences such that they
+/// may be used within a URL, but is smarter than `liquid__filter__escape` in
+/// that it _should_ not escape already escaped characters
+liquid__filter__escape_once = { liquid__key_word__filter__escape_once }
+/* }}} */
+
+/* ### Liquid filter `escape` -> https://shopify.github.io/liquid/filters/escape/ {{{ */
+liquid__key_word__filter__escape = { "escape" ~ !object__word+ }
+
+/// Escapes string by replacing characters with escape sequences such that they
+/// may be used within a URL
+liquid__filter__escape = { liquid__key_word__filter__escape }
+/* }}} */
+
+/* ### Liquid filter `first` -> https://shopify.github.io/liquid/filters/first/ {{{ */
+liquid__key_word__filter__first = { "first" ~ !object__word+ }
+
+/// Return first element of an array
+liquid__filter__first = { liquid__key_word__filter__first }
+/* }}} */
+
+/* ### Liquid filter `floor` -> https://shopify.github.io/liquid/filters/floor/ {{{ */
+liquid__key_word__filter__floor = { "floor" ~ !object__word+ }
+
+/// Rounds an input down to nearest whole number
+liquid__filter__floor = { liquid__key_word__filter__floor }
+/* }}} */
+
+/* ### Liquid filter `join` -> https://shopify.github.io/liquid/filters/join/ {{{ */
+liquid__key_word__filter__join = ${ "join" ~ !object__word+ }
+liquid__filter__join__value = ${ liquid__type }
+
+/// Combines items of an array into a `string` using argument as separator
+liquid__filter__join = ${
+    liquid__key_word__filter__join
+  ~ SPACE_OR_NEWLINE*
+  ~ colon
+  ~ SPACE_OR_NEWLINE+
+  ~ liquid__filter__join__value
+}
+/* }}} */
+
+/* ### Liquid filter `last` -> https://shopify.github.io/liquid/filters/last/ {{{ */
+liquid__key_word__filter__last = { "last" ~ !object__word+ }
+
+/// Return last element of an array
+liquid__filter__last = { liquid__key_word__filter__last }
+/* }}} */
+
+/* ### Liquid filter `lstrip` -> https://shopify.github.io/liquid/filters/lstrip/ {{{ */
+liquid__key_word__filter__lstrip = { "lstrip" ~ !object__word+ }
+
+/// Remove all white space (tabs, spaces, and newlines) from left side of string
+liquid__filter__lstrip = { liquid__key_word__filter__lstrip }
+/* }}} */
+
+/* ### Liquid filter `map` -> https://shopify.github.io/liquid/filters/map/ {{{ */
+liquid__key_word__filter__map = ${ "map" ~ !object__word+ }
+liquid__filter__map__value = ${ liquid__type }
+
+/// Creates an array of values by extracting values of a named property from another object
+liquid__filter__map = ${
+    liquid__key_word__filter__map
+  ~ SPACE_OR_NEWLINE*
+  ~ colon
+  ~ SPACE_OR_NEWLINE+
+  ~ liquid__filter__map__value
+}
+/* }}} */
+
+/* ### Liquid filter `minus` -> https://shopify.github.io/liquid/filters/minus/ {{{ */
+liquid__key_word__filter__minus = ${ "minus" ~ !object__word+ }
+liquid__filter__minus__value = ${ liquid__type }
+
+/// Subtract a number from another number
+liquid__filter__minus = ${
+    liquid__key_word__filter__minus
+  ~ SPACE_OR_NEWLINE*
+  ~ colon
+  ~ SPACE_OR_NEWLINE+
+  ~ liquid__filter__minus__value
+}
+/* }}} */
+
+/* ### Liquid filter `modulo` -> https://shopify.github.io/liquid/filters/modulo/ {{{ */
+liquid__key_word__filter__modulo = ${ "modulo" ~ !object__word+ }
+liquid__filter__modulo__value = ${ liquid__type }
+
+/// Returns the remainder of a division operation
+liquid__filter__modulo = ${
+    liquid__key_word__filter__modulo
+  ~ SPACE_OR_NEWLINE*
+  ~ colon
+  ~ SPACE_OR_NEWLINE+
+  ~ liquid__filter__modulo__value
+}
+/* }}} */
+
+/* ### Liquid filter `newline_to_br` -> https://shopify.github.io/liquid/filters/newline_to_br/ {{{ */
+liquid__key_word__filter__newline_to_br = { "newline_to_br" ~ !object__word+ }
+
+/// Inserts an HTML break (`<br />`) in front of every newline (`\n`) in a string
+liquid__filter__newline_to_br = { liquid__key_word__filter__newline_to_br }
+/* }}} */
+
+/* ### Liquid filter `plus` -> https://shopify.github.io/liquid/filters/plus/ {{{ */
+liquid__key_word__filter__plus = ${ "plus" ~ !object__word+ }
+liquid__filter__plus__value = ${ liquid__type }
+
+/// Adds a number from another number
+liquid__filter__plus = ${
+    liquid__key_word__filter__plus
+  ~ SPACE_OR_NEWLINE*
+  ~ colon
+  ~ SPACE_OR_NEWLINE+
+  ~ liquid__filter__plus__value
+}
+/* }}} */
+
+/* ### Liquid filter `prepend` -> https://shopify.github.io/liquid/filters/prepend/ {{{ */
+liquid__key_word__filter__prepend = ${ "prepend" ~ !object__word+ }
+liquid__filter__prepend__value = ${ liquid__type }
+
+/// Adds specified string to beginning of piped string
+liquid__filter__prepend = ${
+    liquid__key_word__filter__prepend
+  ~ SPACE_OR_NEWLINE*
+  ~ colon
+  ~ SPACE_OR_NEWLINE+
+  ~ liquid__filter__prepend__value
+}
+/* }}} */
+
+/* ### Liquid filter `remove_first` -> https://shopify.github.io/liquid/filters/remove_first/ {{{ */
+liquid__key_word__filter__remove_first = ${ "remove_first" ~ !object__word+ }
+liquid__filter__remove_first__value = ${ liquid__type }
+
+/// Removes every occurrence of the specified substring from  a string
+liquid__filter__remove_first = ${
+    liquid__key_word__filter__remove_first
+  ~ SPACE_OR_NEWLINE*
+  ~ colon
+  ~ SPACE_OR_NEWLINE+
+  ~ liquid__filter__remove_first__value
+}
+/* }}} */
+
+/* ### Liquid filter `remove` -> https://shopify.github.io/liquid/filters/remove/ {{{ */
+liquid__key_word__filter__remove = ${ "remove" ~ !object__word+ }
+liquid__filter__remove__value = ${ liquid__type }
+
+/// Removes every occurrence of the specified substring from  a string
+liquid__filter__remove = ${
+    liquid__key_word__filter__remove
+  ~ SPACE_OR_NEWLINE*
+  ~ colon
+  ~ SPACE_OR_NEWLINE+
+  ~ liquid__filter__remove__value
+}
+/* }}} */
+
+/* ### Liquid filter `replace_first` -> https://shopify.github.io/liquid/filters/replace_first/ {{{ */
+liquid__key_word__filter__replace_first = ${ "replace_first" ~ !object__word+ }
+
+/// Replaces every occurrence of first argument with second argument within piped string
+liquid__filter__replace_first = ${
+    liquid__key_word__filter__replace_first
+  ~ SPACE_OR_NEWLINE*
+  ~ colon
+  ~ SPACE_OR_NEWLINE+
+  ~ liquid__filter__replace__target
+  ~ SPACE_OR_NEWLINE*
+  ~ comma
+  ~ SPACE_OR_NEWLINE*
+  ~ liquid__filter__replace__value
+}
+/* }}} */
+
+/* ### Liquid filter `replace` -> https://shopify.github.io/liquid/filters/replace/ {{{ */
+liquid__key_word__filter__replace = ${ "replace" ~ !object__word+ }
+liquid__filter__replace__target = ${ liquid__type }
+liquid__filter__replace__value = ${ liquid__type }
+
+/// Replaces every occurrence of first argument with second argument within piped string
+liquid__filter__replace = ${
+    liquid__key_word__filter__replace
+  ~ SPACE_OR_NEWLINE*
+  ~ colon
+  ~ SPACE_OR_NEWLINE+
+  ~ liquid__filter__replace__target
+  ~ SPACE_OR_NEWLINE*
+  ~ comma
+  ~ SPACE_OR_NEWLINE*
+  ~ liquid__filter__replace__value
+}
+/* }}} */
+
+/* ### Liquid filter `reverse` -> https://shopify.github.io/liquid/filters/reverse/ {{{ */
+liquid__key_word__filter__reverse = { "reverse" ~ !object__word+ }
+
+/// Return array in reversed order
+liquid__filter__reverse = { liquid__key_word__filter__reverse }
+/* }}} */
+
+/* ### Liquid filter `round` -> https://shopify.github.io/liquid/filters/round/ {{{ */
+liquid__key_word__filter__round = ${ "round" ~ !object__word+ }
+liquid__filter__round__value = ${ liquid__type }
+
+/// Round number to nearest integer, or if `liquid__filter__round__value` is
+/// passed to that number of decimal places
+liquid__filter__round = ${
+    liquid__key_word__filter__round
+  ~ (
+        SPACE_OR_NEWLINE*
+      ~ colon
+      ~ SPACE_OR_NEWLINE+
+      ~ liquid__filter__round__value
+    )?
+}
+/* }}} */
+
+/* ### Liquid filter `rstrip` -> https://shopify.github.io/liquid/filters/rstrip/ {{{ */
+liquid__key_word__filter__rstrip = { "rstrip" ~ !object__word+ }
+
+/// Remove all white space (tabs, spaces, and newlines) from right side of string
+liquid__filter__rstrip = { liquid__key_word__filter__rstrip }
+/* }}} */
+
+/* ### Liquid filter `size` -> https://shopify.github.io/liquid/filters/size/ {{{ */
+liquid__key_word__filter__size = { "size" ~ !object__word+ }
+
+/// Returns number of characters in string, or number of items in an array
+liquid__filter__size = { liquid__key_word__filter__size }
+/* }}} */
+
+/* ### Liquid filter `slice` -> https://shopify.github.io/liquid/filters/slice/ {{{ */
+liquid__key_word__filter__slice = { "slice" ~ !object__word+ }
+liquid__filter__slice__index = { liquid__type }
+liquid__filter__slice__limit = { liquid__type }
+
+/// Returns a substring of one character or series of array items beginning at
+/// the index specified by the first argument. An optional second argument
+/// specifies the length of the substring or number of array items to be
+/// returned.
+liquid__filter__slice = {
+    liquid__key_word__filter__slice
+  ~ SPACE_OR_NEWLINE*
+  ~ colon
+  ~ SPACE_OR_NEWLINE*
+  ~ liquid__filter__slice__index
+  ~ (
+        SPACE_OR_NEWLINE*
+      ~ comma
+      ~ SPACE_OR_NEWLINE*
+      ~ liquid__filter__slice__limit
+    )?
+}
+/* }}} */
+
+/* ### Liquid filter `sort_natural` -> https://shopify.github.io/liquid/filters/sort_natural/ {{{ */
+liquid__key_word__filter__sort_natural = { "sort_natural" ~ !object__word+ }
+
+liquid__filter__sort_natural__property = { liquid__type }
+
+/// Sort items in an array in a case sensitive order
+liquid__filter__sort_natural = {
+    liquid__key_word__filter__sort_natural
+  ~ SPACE_OR_NEWLINE*
+  ~ colon
+  ~ SPACE_OR_NEWLINE*
+  ~ liquid__filter__sort_natural__property
+}
+/* }}} */
+
+/* ### Liquid filter `sort` -> https://shopify.github.io/liquid/filters/sort/ {{{ */
+liquid__key_word__filter__sort = { "sort" ~ !object__word+ }
+
+/// Sort items in an array in a case sensitive order
+liquid__filter__sort = { liquid__key_word__filter__sort }
+/* }}} */
+
+/* ### Liquid filter `split` -> https://shopify.github.io/liquid/filters/split/ {{{ */
+liquid__key_word__filter__split = ${ "split" ~ !object__word+ }
+liquid__filter__split__separator = ${ liquid__type }
+
+/// Divides a string into an array using the argument as a separator
+liquid__filter__split = ${
+    liquid__key_word__filter__split
+  ~ SPACE_OR_NEWLINE*
+  ~ colon
+  ~ SPACE_OR_NEWLINE+
+  ~ liquid__filter__split__separator
+}
+/* }}} */
+
+/* ### Liquid filter `strip_html` -> https://shopify.github.io/liquid/filters/strip_html/ {{{ */
+liquid__key_word__filter__strip_html = { "strip_html" ~ !object__word+ }
+
+/// Remove leading and trailing spaces from string
+liquid__filter__strip_html = { liquid__key_word__filter__strip_html }
+/* }}} */
+
+/* ### Liquid filter `strip_newlines` -> https://shopify.github.io/liquid/filters/strip_newlines/ {{{ */
+liquid__key_word__filter__strip_newlines = { "strip_newlines" ~ !object__word+ }
+
+/// Remove leading and trailing spaces from string
+liquid__filter__strip_newlines = { liquid__key_word__filter__strip_newlines }
+/* }}} */
+
+/* ### Liquid filter `strip` -> https://shopify.github.io/liquid/filters/strip/ {{{ */
+liquid__key_word__filter__strip = { "strip" ~ !object__word+ }
+
+/// Remove leading and trailing spaces from string
+liquid__filter__strip = { liquid__key_word__filter__strip }
+/* }}} */
+
+/* ### Liquid filter `sum` -> https://shopify.github.io/liquid/filters/sum/ {{{ */
+liquid__key_word__filter__sum = ${ "sum" ~ !object__word+ }
+liquid__filter__sum__target_property = ${ liquid__type }
+
+/// Sums all items in an array, or targeted object property within array of objects
+liquid__filter__sum = ${
+    liquid__key_word__filter__sum
+  ~ (
+      SPACE_OR_NEWLINE*
+    ~ colon
+    ~ SPACE_OR_NEWLINE+
+    ~ liquid__filter__sum__target_property
+  )?
+}
+/* }}} */
+
+/* ### Liquid filter `times` -> https://shopify.github.io/liquid/filters/times/ {{{ */
+liquid__key_word__filter__times = ${ "times" ~ !object__word+ }
+liquid__filter__times__value = ${ liquid__type }
+
+/// Multiplies a number by another number
+liquid__filter__times = ${
+    liquid__key_word__filter__times
+  ~ SPACE_OR_NEWLINE*
+  ~ colon
+  ~ SPACE_OR_NEWLINE+
+  ~ liquid__filter__times__value
+}
+/* }}} */
+
+/* ### Liquid filter `truncatewords` -> https://shopify.github.io/liquid/filters/truncatewords/ {{{ */
+liquid__key_word__filter__truncatewords = ${ "truncatewords" ~ !object__word+ }
+liquid__filter__truncatewords__max_length = ${ liquid__type }
+liquid__filter__truncatewords__custom_ellipsis = ${ liquid__type }
+
+/// Shorten string to max length of words and append optional ellipsis if string was truncatewordsd
+liquid__filter__truncatewords = ${
+    liquid__key_word__filter__truncatewords
+  ~ SPACE_OR_NEWLINE*
+  ~ liquid__filter__truncatewords__max_length
+  ~ (
+      SPACE_OR_NEWLINE*
+    ~ colon
+    ~ SPACE_OR_NEWLINE+
+    ~ liquid__filter__truncatewords__custom_ellipsis
+  )?
+}
+/* }}} */
+
+/* ### Liquid filter `truncate` -> https://shopify.github.io/liquid/filters/truncate/ {{{ */
+liquid__key_word__filter__truncate = ${ "truncate" ~ !object__word+ }
+liquid__filter__truncate__max_length = ${ liquid__type }
+liquid__filter__truncate__custom_ellipsis = ${ liquid__type }
+
+/// Shorten string to max length of characters and append optional ellipsis if string was truncated
+liquid__filter__truncate = ${
+    liquid__key_word__filter__truncate
+  ~ SPACE_OR_NEWLINE*
+  ~ liquid__filter__truncate__max_length
+  ~ (
+      SPACE_OR_NEWLINE*
+    ~ colon
+    ~ SPACE_OR_NEWLINE+
+    ~ liquid__filter__truncate__custom_ellipsis
+  )?
+}
+/* }}} */
+
+/* ### Liquid filter `uniq` -> https://shopify.github.io/liquid/filters/uniq/ {{{ */
+liquid__key_word__filter__uniq = { "uniq" ~ !object__word+ }
+
+/// Remove any duplicate items from an array
+liquid__filter__uniq = { liquid__key_word__filter__uniq }
+/* }}} */
+
+/* ### Liquid filter `upcase` -> https://shopify.github.io/liquid/filters/upcase/ {{{ */
+liquid__key_word__filter__upcase = { "upcase" ~ !object__word+ }
+
+/// Makes all characters of string uppercase
+liquid__filter__upcase = { liquid__key_word__filter__upcase }
+/* }}} */
+
+/* ### Liquid filter `url_decode` -> https://shopify.github.io/liquid/filters/url_decode/ {{{ */
+liquid__key_word__filter__url_decode = { "url_decode" ~ !object__word+ }
+
+/// Makes all characters of string uppercase
+liquid__filter__url_decode = { liquid__key_word__filter__url_decode }
+/* }}} */
+
+/* ### Liquid filter `url_encode` -> https://shopify.github.io/liquid/filters/url_encode/ {{{ */
+liquid__key_word__filter__url_encode = { "url_encode" ~ !object__word+ }
+
+/// Makes all characters of string uppercase
+liquid__filter__url_encode = { liquid__key_word__filter__url_encode }
+/* }}} */
+
+/* ### Liquid filter `where` -> https://shopify.github.io/liquid/filters/where/ {{{ */
+liquid__key_word__filter__where = ${ "where" ~ !object__word+ }
+liquid__filter__where__target_property = ${ liquid__type }
+liquid__filter__where__target_value = ${ liquid__type }
+
+/// Creates an array including only objects with target property is truthy or
+/// matches optional target value
+liquid__filter__where = ${
+    liquid__key_word__filter__where
+  ~ SPACE_OR_NEWLINE*
+  ~ colon
+  ~ SPACE_OR_NEWLINE+
+  ~ liquid__filter__where__target_property
+  ~ (
+        SPACE_OR_NEWLINE+
+      ~ comma
+      ~ SPACE_OR_NEWLINE+
+      ~ liquid__filter__where__target_value
+    )?
+}
+/* }}} */
+
+/* ### Liquid filter that is not currently recognized by this parser {{{ */
+liquid__key_word__filter__unrecognized = ${
+    !liquid__key_word__filter
+  ~ object__word
+}
+
+liquid__filter__unrecognized__parameters = ${
+  (
+    !(
+        SPACE_OR_NEWLINE*
+      ~ (
+            liquid__filter__separator
+          | liquid__evaluate__close__strip
+          | liquid__evaluate__close__plain
+        )
+    )
+    ~ ANY
+  )*
+}
+
+liquid__filter__unrecognized = ${
+    liquid__key_word__filter__unrecognized
+  ~ SPACE_OR_NEWLINE*
+  ~ (
+      colon
+    ~ SPACE_OR_NEWLINE*
+    ~ liquid__filter__unrecognized__parameters
+  )?
+}
+/* }}} */
+
+/* }}} */
+
+/// We must not use the builtin `WHITESPACE` overrides because that consumes
+/// leading new-lines and/or spaces within content blocks
+SPACE_OR_NEWLINE = _{ " " | "\t" | NEWLINE }
+
+// vim: foldmethod=marker

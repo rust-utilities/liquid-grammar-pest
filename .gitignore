@@ -1,0 +1,9 @@
+## Development
+dev
+
+## Rust
+/target
+
+## Vim (BTW™)
+.swp
+.swo
