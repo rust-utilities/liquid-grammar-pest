@@ -15,7 +15,7 @@ on:
     branches: [ main ]
     tags-ignore: [ "*" ]
     paths:
-      - ./github/workflows/**/*.yaml
+      - .github/workflows/**/*.yaml
       - examples/**/*.rs
       - src/**/*.pest
       - src/**/*.rs
